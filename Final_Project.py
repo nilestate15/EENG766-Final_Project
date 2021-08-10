@@ -86,12 +86,22 @@ def gen_meas(sat_ECEF, truth, s_dt, Cdt):
         usr_ECEF[i,1] = truth[i*s_dt,2]
         usr_ECEF[i,2] = truth[i*s_dt,4]
     
-    noise = 5.0
+    # Add random bias to satellite for anomaly
+    sat_bias = 8.0
+    # How many secs/meas you want to add random bias to
+    num_bias = 10
+
     meas = np.zeros((len(usr_ECEF), len(sat_ECEF)))
     for i, usr_pos in enumerate(usr_ECEF):
         for n, sat_pos in enumerate(sat_ECEF):
-            meas[i,n] = np.sqrt((sat_pos[0] - usr_pos[0])**2 + (sat_pos[1] - usr_pos[1])**2 + (sat_pos[2] - usr_pos[2])**2) + Cdt + noise
+            meas[i,n] = np.sqrt((sat_pos[0] - usr_pos[0])**2 + (sat_pos[1] - usr_pos[1])**2 + (sat_pos[2] - usr_pos[2])**2) + Cdt
     
+    # Pick random spot in meas data and add satellite bias to
+    bias_sat = random.randint(0, len(sat_ECEF)-1)
+    bias_sec = random.randint(0, len(meas)-num_bias)
+    meas[bias_sec:bias_sec+(num_bias-1), bias_sat] = meas[bias_sec:bias_sec+(num_bias-1), bias_sat] + sat_bias
+
+
     return meas
 
 def plot_pseudo(meas, pred_mat, num_coords, s_dt):
@@ -160,6 +170,7 @@ def plot_coords(truth, est_state_mat, num_coords):
     plt.show()
     return
 
+## SET UP
 # number of satellites
 num_SVs = 5
 # satellite timestep (update rate)
@@ -174,20 +185,21 @@ usr_vel = 25.0
 usr_x0 = np.array([-681, -4925, 3980])
 # speed of light (m/s)
 C = 299792458.0
-#Psuedorange bias
+# Psuedorange bias
 Cdt = 0.0
-#Psuedorange bias velocity
+# Psuedorange bias velocity
 Cdt_dot = 0.0
-#Pseudorange std dev
+# Pseudorange std dev
 Pr_std = 0.0
-#White noise from random walk position velocity error
+# White noise from random walk position velocity error
 Sp = 5.0
-#White noise from random walk clock bias error (Cdt)
+# White noise from random walk clock bias error (Cdt)
 Sf = 36
-#White noise from random walk clock drift error (Cdt_dot)
+# White noise from random walk clock drift error (Cdt_dot)
 Sg = 0.01
-#Pseudorange measurement error equal variance
+# Pseudorange measurement error equal variance
 rho_error = 36
+
 
 # Initial State and Initial Covariance
 init_usr_vel = usr_vel * np.random.randn(3)
