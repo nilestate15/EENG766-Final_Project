@@ -104,6 +104,20 @@ def gen_meas(sat_ECEF, truth, s_dt, Cdt):
 
     return meas
 
+def sliding_win(pred_meas, res):
+    '''
+    This function creates a sliding window for the predicted measurements.
+
+    Args:
+        pred_meas: an (num sat) array of pseudorange of each satellite
+        res: an (num sat) residual array 
+        
+
+    Returns:
+        meas_avg: an (num truth sat) array of average psuedorange measurements from sliding window
+    '''
+
+
 def plot_pseudo(meas, pred_mat, num_coords, s_dt):
     t = np.arange(0, num_coords, s_dt)
 
