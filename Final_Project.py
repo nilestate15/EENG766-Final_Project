@@ -104,68 +104,6 @@ def gen_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
 
     return meas
 
-def factor_graph(num_coords, num_SVs, sat_ECEF, Q, R, meas, curr_x, curr_P):
-    '''
-    This function creates a sliding window for the predicted measurements.
-
-    Args:
-        pred_meas: an (num sat) array of pseudorange of each satellite
-        res: an (num sat) residual array 
-        
-
-    Returns:
-        meas_avg: an (num truth sat) array of average psuedorange measurements from sliding window
-    '''
-    cols = num_coords * 8
-    rows = (len(meas) * num_SVs) + (num_coords * 8)
-    A_mat = np.zeros((rows,cols))
-
-    for i in range(num_coords):
-    # Build H Matrix (Measurement Matrix/Top of A matrix)
-        H = np.zeros((num_SVs, len(curr_x)))
-        for cnt, sat_pos in enumerate(sat_ECEF):
-            part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
-            part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
-            part_z = -(sat_pos[2] - curr_x[4]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
-            part_cdt = 1.
-
-            H[cnt,0] = part_x
-            H[cnt,2] = part_y
-            H[cnt,4] = part_z
-            H[cnt,6] = part_cdt
-
-        A_mat[num_SVs*i:num_SVs*i+num_SVs, len(curr_x)*i:len(curr_x)*i+len(curr_x)] = H
-
-        # Build F Matrix (State Matrix/Bottom of A matrix (dynamics))
-        A = np.zeros((len(curr_x),len(curr_x)))
-        Acv = np.array([[1.,dt], 
-                        [0.,1.]])
-
-        for m in range(int(len(A)/2)):
-            A[2*m:2*m+2,2*m:2*m+2] = Acv
-
-        
-        A_mat[(len(meas)*num_SVs)+(len(curr_x)*i):(len(meas)*num_SVs)+(len(curr_x)*i)+len(curr_x), len(curr_x)*i:len(curr_x)*i+len(curr_x)] = A
-        
-        curr_x = A.dot(curr_x)
-        curr_P = A.dot(curr_P).dot(A.T) + Q
-
-        # Kalman Gain
-        K = (curr_P.dot(H.T)).dot(la.inv(H.dot(curr_P).dot(H.T) + R))
-
-        # Predicted Pseudorange Measurement
-        pred_meas = np.zeros(len(sat_ECEF))
-        for n, sat_pos in enumerate(sat_ECEF):
-            pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
-
-        # Residual
-        res = meas[i] - pred_meas
-
-        # Update state and covariance
-        curr_x = curr_x + K.dot(res)
-        curr_P = curr_P - K.dot(H).dot(curr_P)
-
-    return A_mat
 
 def plot_pseudo(meas, pred_mat, num_coords, s_dt):
     t = np.arange(0, num_coords, s_dt)
@@ -238,7 +176,7 @@ def plot_coords(truth, est_state_mat, num_coords):
 num_SVs = 5
 # satellite timestep (update rate)
 s_dt = 1
-# number of coordinates/steps from user
+# number of coordinates/steps from user not including initial
 num_coords = 100
 # user timestep
 dt = 1.0
@@ -304,9 +242,6 @@ res_mat = np.zeros((num_coords, num_SVs))
 
 # Predicted Pseudorange Matrix
 pred_mat = np.zeros((num_coords, num_SVs))
-
-# Sliding Window
-factor_gph = factor_graph(num_coords, num_SVs, sat_ECEF, Q, R, meas, curr_x, curr_P)
 
 for i in range(num_coords):
     ## Propagation
