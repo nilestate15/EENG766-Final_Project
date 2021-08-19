@@ -106,7 +106,7 @@ def gen_meas(num_coords, sat_ECEF, usr_x0, truth, s_dt, Cdt):
 
     return meas
 
-def predicted_meas(truth, sensor_meas, s_dt, Cdt):
+def predicted_meas(sat_ECEF, sensor_meas, Cdt):
     '''
     This function takes in an satellite coords, truth state, timing error, and satellite update speed 
     and outputs Psuedorange vector for each satellite update.
@@ -121,10 +121,11 @@ def predicted_meas(truth, sensor_meas, s_dt, Cdt):
         meas: an (num truth/s_dt, num sat) array of psuedorange measurements
     '''
     # Predicted Pseudorange Measurement
-    pred_meas = np.zeros(len(sat_ECEF))
-    for n, sat_pos in enumerate(sat_ECEF):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
-
+    s_meas = sensor_meas
+    pred_meas = np.zeros((len(s_meas), len(sat_ECEF)))
+    for i, curr_x in enumerate(s_meas):
+        for n, sat_pos in enumerate(sat_ECEF):
+            pred_meas[i,n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
 
     return pred_meas
 
@@ -318,6 +319,9 @@ pred_mat = np.zeros((num_coords, num_SVs))
 
 # Sliding Window
 A_mat = create_A(num_coords, num_SVs, sat_ECEF, truth, sensor_meas, Q, R, curr_P)
+
+#Predicted Measurements
+predicted_meas(sat_ECEF, sensor_meas, Cdt)
 
 # for i in range(num_coords):
 #     ## Propagation
