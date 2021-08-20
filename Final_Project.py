@@ -117,6 +117,8 @@ def sliding_win(pred_meas, res):
         meas_avg: an (num truth sat) array of average psuedorange measurements from sliding window
     '''
 
+    pass
+
 
 def plot_pseudo(meas, pred_mat, num_coords, s_dt):
     t = np.arange(0, num_coords, s_dt)
