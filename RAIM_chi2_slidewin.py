@@ -66,7 +66,7 @@ def gen_truth(num_coords, x0, dt):
     
     return truth
 
-def gen_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
+def gen_meas(num_coords, sat_ECEF, usr_x0, truth, s_dt, Cdt):
     '''
     This function takes in an satellite coords, truth state, timing error, and satellite update speed 
     and outputs Psuedorange vector for each satellite update.
@@ -80,15 +80,17 @@ def gen_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
     Returns:
         meas: an (num truth/s_dt, num sat) array of psuedorange measurements
     '''
-    usr_ECEF = np.zeros((num_coords,3))
+    usr_ECEF = np.zeros((num_coords+1,3))
+    usr_ECEF[0] = usr_x0
     for i in range(len(truth)):
-        usr_ECEF[i,0] = truth[i*s_dt,0]
-        usr_ECEF[i,1] = truth[i*s_dt,2]
-        usr_ECEF[i,2] = truth[i*s_dt,4]
-    
+        if i > 0:
+            usr_ECEF[i,0] = truth[i*s_dt,0]
+            usr_ECEF[i,1] = truth[i*s_dt,2]
+            usr_ECEF[i,2] = truth[i*s_dt,4]
+        
     # Add random bias to satellite for anomaly
     sat_bias = 8.0
-    # How many secs/meas you want to add random bias to
+    # How many secs/meas you want to add random bias to (duration)
     num_bias = 10
 
     meas = np.zeros((len(usr_ECEF), len(sat_ECEF)))
@@ -104,6 +106,76 @@ def gen_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
 
     return meas
 
+def predicted_meas(sat_ECEF, sensor_meas, Cdt):
+    '''
+    This function takes in an satellite coords, truth state, timing error, and satellite update speed 
+    and outputs Psuedorange vector for each satellite update.
+
+    Args:
+        sat_ECEF: an (num sat,3) array of ECEF coordinates of satellites
+        truth: an (n,8) array of true user state 
+        s_dt: an int representing satellite update timestep/speed
+        Cdt: an int representing receiver, satellite timing error 
+
+    Returns:
+        meas: an (num truth/s_dt, num sat) array of psuedorange measurements
+    '''
+    # Predicted Pseudorange Measurement
+    s_meas = sensor_meas
+    pred_meas = np.zeros((len(s_meas), len(sat_ECEF)))
+    for i, curr_x in enumerate(s_meas):
+        for n, sat_pos in enumerate(sat_ECEF):
+            pred_meas[i,n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
+
+    return pred_meas
+
+
+def create_A(num_coords, num_SVs, sat_ECEF, truth, sensor_meas, Q, R, curr_P):
+    '''
+    This function creates a sliding window for the predicted measurements.
+
+    Args:
+        pred_meas: an (num sat) array of pseudorange of each satellite
+        res: an (num sat) residual array 
+        
+
+    Returns:
+        meas_avg: an (num truth sat) array of average psuedorange measurements from sliding window
+    '''
+    s_meas = sensor_meas
+    usr_st = truth
+    cols = len(s_meas) * 8
+    rows = (len(s_meas) * num_SVs) + (len(s_meas) * 8)
+    A_mat = np.zeros((rows,cols))
+
+    for i, curr_x in enumerate(usr_st):
+    # Build H Matrix (Measurement Matrix/Top of A matrix)
+        H = np.zeros((num_SVs, len(curr_x)))
+        for cnt, sat_pos in enumerate(sat_ECEF):
+            part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+            part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+            part_z = -(sat_pos[2] - curr_x[4]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+            part_cdt = 1.
+
+            H[cnt,0] = part_x
+            H[cnt,2] = part_y
+            H[cnt,4] = part_z
+            H[cnt,6] = part_cdt
+
+        A_mat[num_SVs*i:num_SVs*i+num_SVs, len(curr_x)*i:len(curr_x)*i+len(curr_x)] = H
+
+        # Build F Matrix (State Matrix/Bottom of A matrix (dynamics))
+        A = np.zeros((len(curr_x),len(curr_x)))
+        Acv = np.array([[1.,dt], 
+                        [0.,1.]])
+
+        for m in range(int(len(A)/2)):
+            A[2*m:2*m+2,2*m:2*m+2] = Acv
+
+        
+        A_mat[(len(s_meas)*num_SVs)+(len(curr_x)*i):(len(s_meas)*num_SVs)+(len(curr_x)*i)+len(curr_x), len(curr_x)*i:len(curr_x)*i+len(curr_x)] = A
+
+    return A_mat
 
 def plot_pseudo(meas, pred_mat, num_coords, s_dt):
     t = np.arange(0, num_coords, s_dt)
@@ -176,7 +248,7 @@ def plot_coords(truth, est_state_mat, num_coords):
 num_SVs = 5
 # satellite timestep (update rate)
 s_dt = 1
-# number of coordinates/steps from user not including initial
+# number of coordinates/steps from user not including initial 
 num_coords = 100
 # user timestep
 dt = 1.0
@@ -209,8 +281,10 @@ P0 = np.eye(8)
 
 # Get sat coordinates, truth data of states and pseudorange measurements
 sat_ECEF = gen_sat_ecef(num_SVs)
-truth = gen_truth(num_coords, x0, dt)
-meas = gen_meas(num_coords, sat_ECEF, truth, s_dt, Cdt)
+truth = np.zeros((num_coords + 1, len(x0)))
+truth[0] = x0
+truth[1:] = gen_truth(num_coords, x0, dt)
+sensor_meas = gen_meas(num_coords, sat_ECEF, usr_x0, truth, s_dt, Cdt)
 
 # Set current state and current covariance
 curr_x = x0
@@ -243,79 +317,85 @@ res_mat = np.zeros((num_coords, num_SVs))
 # Predicted Pseudorange Matrix
 pred_mat = np.zeros((num_coords, num_SVs))
 
-for i in range(num_coords):
-    ## Propagation
-    # Build F Matrix (State Matrix)
-    A = np.zeros((len(curr_x),len(curr_x)))
-    Acv = np.array([[1.,dt], 
-                    [0.,1.]])
+# Sliding Window
+A_mat = create_A(num_coords, num_SVs, sat_ECEF, truth, sensor_meas, Q, R, curr_P)
 
-    for m in range(int(len(A)/2)):
-        A[2*m:2*m+2,2*m:2*m+2] = Acv
+#Predicted Measurements
+predicted_meas(sat_ECEF, sensor_meas, Cdt)
 
-    # Build H Matrix (Measurement Matrix)
-    H = np.zeros((num_SVs, len(curr_x)))
-    for cnt, sat_pos in enumerate(sat_ECEF):
-        part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
-        part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
-        part_z = -(sat_pos[2] - curr_x[4]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
-        part_cdt = 1.
+# for i in range(num_coords):
+#     ## Propagation
+#     # Build F Matrix (State Matrix)
+#     A = np.zeros((len(curr_x),len(curr_x)))
+#     Acv = np.array([[1.,dt], 
+#                     [0.,1.]])
 
-        H[cnt,0] = part_x
-        H[cnt,2] = part_y
-        H[cnt,4] = part_z
-        H[cnt,6] = part_cdt
+#     for m in range(int(len(A)/2)):
+#         A[2*m:2*m+2,2*m:2*m+2] = Acv
+
+#     # Build H Matrix (Measurement Matrix)
+#     H = np.zeros((num_SVs, len(curr_x)))
+#     for cnt, sat_pos in enumerate(sat_ECEF):
+#         part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+#         part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+#         part_z = -(sat_pos[2] - curr_x[4]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+#         part_cdt = 1.
+
+#         H[cnt,0] = part_x
+#         H[cnt,2] = part_y
+#         H[cnt,4] = part_z
+#         H[cnt,6] = part_cdt
     
     
-    curr_x = A.dot(curr_x)
-    curr_P = A.dot(curr_P).dot(A.T) + Q
+#     curr_x = A.dot(curr_x)
+#     curr_P = A.dot(curr_P).dot(A.T) + Q
 
-    # Kalman Gain
-    K = (curr_P.dot(H.T)).dot(la.inv(H.dot(curr_P).dot(H.T) + R))
+#     # Kalman Gain
+#     K = (curr_P.dot(H.T)).dot(la.inv(H.dot(curr_P).dot(H.T) + R))
 
-    # Predicted Pseudorange Measurement
-    pred_meas = np.zeros(len(sat_ECEF))
-    for n, sat_pos in enumerate(sat_ECEF):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
+#     # Predicted Pseudorange Measurement
+#     pred_meas = np.zeros(len(sat_ECEF))
+#     for n, sat_pos in enumerate(sat_ECEF):
+#         pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
 
-    # Residual
-    res = meas[i] - pred_meas
+#     # Residual
+#     res = meas[i] - pred_meas
 
-    ## Test statistic (RAIM Portion)
-    # Variance Covariance Matrix (inverse of weight matrix)
-    VCM = la.inv(H.dot(curr_P).dot(H.T) + R)
-    # P matrix variance and the r.TP^-1r (inverse scales and makes independent & process change std dev)
-    test_stat = (res.T).dot(VCM).dot(res)
-    # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RIAM for Precision Approach)
-    Pfa = 10e-4
+#     ## Test statistic (RAIM Portion)
+#     # Variance Covariance Matrix (inverse of weight matrix)
+#     VCM = la.inv(H.dot(curr_P).dot(H.T) + R)
+#     # P matrix variance and the r.TP^-1r (inverse scales and makes independent & process change std dev)
+#     test_stat = (res.T).dot(VCM).dot(res)
+#     # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RIAM for Precision Approach)
+#     Pfa = 10e-4
 
-    # Find inverse chi squared for threshold
-    thres = st.chi2.isf(q = 1-Pfa, df=num_SVs)
+#     # Find inverse chi squared for threshold
+#     thres = st.chi2.isf(q = 1-Pfa, df=num_SVs)
 
-    # Check if test statistic is within chi squared model
-    if test_stat <= thres:
-        print(f'Coordinate Point {i} is valid')
+#     # Check if test statistic is within chi squared model
+#     if test_stat <= thres:
+#         print(f'Coordinate Point {i} is valid')
         
-    else:
-        print(f'Coordinate Point {i} is invalid')
-        print(f'Threshold: {thres},  Test Statistic: {test_stat}')
+#     else:
+#         print(f'Coordinate Point {i} is invalid')
+#         print(f'Threshold: {thres},  Test Statistic: {test_stat}')
 
-    # Update state and covariance
-    curr_x = curr_x + K.dot(res)
-    curr_P = curr_P - K.dot(H).dot(curr_P)
+#     # Update state and covariance
+#     curr_x = curr_x + K.dot(res)
+#     curr_P = curr_P - K.dot(H).dot(curr_P)
 
-    # Store for plotting
-    est_state_mat[i+1] = curr_x
-    est_cov_mat[i+1] = curr_P
-    pred_mat[i] = pred_meas
-    res_mat[i] = res
+#     # Store for plotting
+#     est_state_mat[i+1] = curr_x
+#     est_cov_mat[i+1] = curr_P
+#     pred_mat[i] = pred_meas
+#     res_mat[i] = res
 
-# Plotting and Tables
-# Plot Psuedoranges of measurements and predicted measurements 
-plot_pseudo(meas, pred_mat, num_coords, s_dt)
-# Plot Truth coordinates to Predicted Coordinates
-plot_coords(truth, est_state_mat, num_coords)
-# Convert Residual data to CSV for Excel Table
-np.savetxt("residuals.csv", res_mat, delimiter=",")
+# # Plotting and Tables
+# # Plot Psuedoranges of measurements and predicted measurements 
+# plot_pseudo(meas, pred_mat, num_coords, s_dt)
+# # Plot Truth coordinates to Predicted Coordinates
+# plot_coords(truth, est_state_mat, num_coords)
+# # Convert Residual data to CSV for Excel Table
+# np.savetxt("residuals.csv", res_mat, delimiter=",")
 
 
