@@ -160,10 +160,14 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     # Residual
     res = sens_meas - pred_meas
 
+    # Weighted Normal of Residual
+    inv_R = la.inv(R)
+    wtd_norm_res = (res.T).dot(inv_R).dot(res)
 
-    return curr_x, curr_P, H, K, pred_meas, res
 
-def RAIM_chi2(curr_x, curr_P, R, H, res):
+    return curr_x, curr_P, H, K, pred_meas, res, wtd_norm_res
+
+def RAIM_chi2(curr_x, curr_P, R, H, res_win):
     '''
     This function handles the RAIM chi2 cumulative test statistic to verify statistic is
     within the threshold
@@ -178,12 +182,23 @@ def RAIM_chi2(curr_x, curr_P, R, H, res):
     Returns:
         nothing
     '''
+    # Set window size
+    win_size = 10
+    np.array(res_win)
+
+    # If array is bigger than win size delete earliest entry
+    if len(res_win) > win_size:
+        np.delete(res_win, 0)
+
+    # Cumulative weighted norm residuals
+    cum_res = sum(res_win)
+
     ## Test statistic (RAIM Portion)
     # Variance Covariance Matrix (inverse of weight matrix)
     VCM = la.inv(H.dot(curr_P).dot(H.T) + R)
     # P matrix variance and the r.TP^-1r (inverse scales and makes independent & process change std dev)
     test_stat = (res.T).dot(VCM).dot(res)
-    # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RIAM for Precision Approach)
+    # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RAIM for Precision Approach)
     Pfa = 10e-4
 
     # Find inverse chi squared for threshold
@@ -337,6 +352,9 @@ res_mat = np.zeros((num_coords, num_SVs))
 # Predicted Pseudorange Matrix
 pred_mat = np.zeros((num_coords, num_SVs))
 
+## Make window size for residuals
+res_win = []
+
 
 
 for i in range(num_coords):
@@ -345,10 +363,11 @@ for i in range(num_coords):
     truth = truth_mat[i]
 
     # EKF
-    curr_x, curr_P, H, K, pred_meas, res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
+    curr_x, curr_P, H, K, pred_meas, res, wtd_norm_res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
 
     # RAIM chi2 statistic check
-    RAIM_chi2(curr_x, curr_P, R, H, res)
+    res_win.append(wtd_norm_res)
+    RAIM_chi2(curr_x, curr_P, R, H, res_win)
 
     # Update state and covariance
     curr_x = curr_x + K.dot(res)
