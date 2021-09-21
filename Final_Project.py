@@ -314,6 +314,7 @@ for i in range(num_coords):
 # Plot Psuedoranges of measurements and predicted measurements 
 plot_pseudo(meas, pred_mat, num_coords, s_dt)
 # Plot Truth coordinates to Predicted Coordinates
+
 plot_coords(truth, est_state_mat, num_coords)
 # Convert Residual data to CSV for Excel Table
 np.savetxt("residuals.csv", res_mat, delimiter=",")

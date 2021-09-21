@@ -125,12 +125,16 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     '''
     ## Propagation
     # Build F Matrix (State Matrix)
-    A = np.zeros((len(curr_x),len(curr_x)))
-    Acv = np.array([[1.,dt], 
+    F = np.zeros((len(curr_x),len(curr_x)))
+    Fcv = np.array([[1.,dt], 
                     [0.,1.]])
 
-    for m in range(int(len(A)/2)):
-        A[2*m:2*m+2,2*m:2*m+2] = Acv
+    for m in range(int(len(F)/2)):
+        F[2*m:2*m+2,2*m:2*m+2] = Fcv
+
+    # Prediction of state and covariance
+    curr_x = F.dot(curr_x)
+    curr_P = F.dot(curr_P).dot(F.T) + Q
 
     # Build H Matrix (Measurement Matrix)
     H = np.zeros((num_SVs, len(curr_x)))
@@ -145,32 +149,46 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
         H[cnt,4] = part_z
         H[cnt,6] = part_cdt
     
-    
-    curr_x = A.dot(curr_x)
-    curr_P = A.dot(curr_P).dot(A.T) + Q
 
     # Kalman Gain
     K = (curr_P.dot(H.T)).dot(la.inv(H.dot(curr_P).dot(H.T) + R))
 
-    # Predicted Pseudorange Measurement
+    # Predicted Pseudorange Measurement (h(x) formula)
     pred_meas = np.zeros(len(sat_ECEF))
     for n, sat_pos in enumerate(sat_ECEF):
         pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
 
-    # Residual
+    
+    # Residuals (eq 26/eq 32 but using hx formula rather than Hx)
     res = sens_meas - pred_meas
 
-    # Weighted Normal of Residual
+    # The identity matrix for the first part of residual covariance (for meas covariance)
+    I_pt1 = np.eye(len(R))
+
+    # The identity matrix for the second part of residual covariance (for state pred covariance)
+    I_pt2 = np.eye(len(P0))
+
+    # Residual covariance matrix (Kalman Filter-Based Integrity Monitoring Against Sensor Faults Mathieu Joerger [eq 28])
+    res_cov = (I_pt1 - H.dot(K)).dot(R).dot(I_pt1 - (H.dot(K))).T - H.dot(I_pt2 - K.dot(H)).dot(P0).dot((I_pt2 - K.dot(H)).T).dot(H.T)
+
+    # Find alpha for noncentral chi square threshold (Equation 30)
     inv_R = la.inv(R)
+    MeasErrCovSqrtInv = la.sqrtm(inv_R)
+    SqrtResCov = la.sqrtm(res_cov)
+
+    [U, s, V] = np.linalg.svd(MeasErrCovSqrtInv * SqrtResCov)
+
+    alpha = s
+    
+    # Weighted Normal of Residual (Equation 33)
     wtd_norm_res = (res.T).dot(inv_R).dot(res)
 
+    return curr_x, curr_P, H, K, res_cov, alpha, wtd_norm_res
 
-    return curr_x, curr_P, H, K, pred_meas, res, wtd_norm_res
-
-def RAIM_chi2(curr_x, curr_P, R, H, res_win):
+def RAIM_chi2(curr_x, curr_P, R, H, K, res_win):
     '''
     This function handles the RAIM chi2 cumulative test statistic to verify statistic is
-    within the threshold
+    within the threshold for Cumulative KF Test statistic
 
     Args:
         curr_x: an (8,) array of the users current state
@@ -182,7 +200,7 @@ def RAIM_chi2(curr_x, curr_P, R, H, res_win):
     Returns:
         nothing
     '''
-    # Set window size
+    # Set window batch size
     win_size = 10
     np.array(res_win)
 
@@ -192,6 +210,13 @@ def RAIM_chi2(curr_x, curr_P, R, H, res_win):
 
     # Cumulative weighted norm residuals
     cum_res = sum(res_win)
+
+    # The identity matrix for the first part of residual covariance (for meas covariance)
+    I_pt1 = np.eye(len(R))
+
+    # The identity matrix for the second part of residual covariance (for state pred covariance)
+    I_pt2 = np.eye(len(P0))
+    
 
     ## Test statistic (RAIM Portion)
     # Variance Covariance Matrix (inverse of weight matrix)
@@ -212,7 +237,7 @@ def RAIM_chi2(curr_x, curr_P, R, H, res_win):
         print(f'Coordinate Point {i} is invalid')
         print(f'Threshold: {thres},  Test Statistic: {test_stat}')
 
-    return curr_x, curr_P, K, H, res
+    return
 
 def plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt):
     t = np.arange(0, num_coords, s_dt)
@@ -363,15 +388,21 @@ for i in range(num_coords):
     truth = truth_mat[i]
 
     # EKF
-    curr_x, curr_P, H, K, pred_meas, res, wtd_norm_res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
+    curr_x, curr_P, H, K, res_cov, alpha, wtd_norm_res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
 
     # RAIM chi2 statistic check
     res_win.append(wtd_norm_res)
-    RAIM_chi2(curr_x, curr_P, R, H, res_win)
+    RAIM_chi2(curr_x, curr_P, R, H, K, res_win)
 
-    # Update state and covariance
-    curr_x = curr_x + K.dot(res)
+    # # Update state and covariance
+    # curr_x = curr_x + K.dot(res)
     curr_P = curr_P - K.dot(H).dot(curr_P)
+
+#Equation 32
+
+#Equation 33
+
+#Equation 34
 
     # Store for plotting
     est_state_mat[i+1] = curr_x
@@ -385,6 +416,5 @@ plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt)
 # Plot Truth coordinates to Predicted Coordinates
 plot_coords(truth_mat, est_state_mat)
 # Convert Residual data to CSV for Excel Table
-np.savetxt("residuals.csv", res_mat, delimiter=",")
-
+#np.savetxt("residuals.csv", res_mat, delimiter=",")
 
