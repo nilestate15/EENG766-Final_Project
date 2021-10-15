@@ -132,9 +132,6 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     for m in range(int(len(F)/2)):
         F[2*m:2*m+2,2*m:2*m+2] = Fcv
 
-    # Prediction of state and covariance
-    curr_x = F.dot(curr_x)
-    curr_P = F.dot(curr_P).dot(F.T) + Q
 
     # Build H Matrix (Measurement Matrix)
     H = np.zeros((num_SVs, len(curr_x)))
@@ -149,6 +146,9 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
         H[cnt,4] = part_z
         H[cnt,6] = part_cdt
     
+    # Prediction of state and covariance
+    curr_x = F.dot(curr_x)
+    curr_P = F.dot(curr_P).dot(F.T) + Q
 
     # Kalman Gain
     K = (curr_P.dot(H.T)).dot(la.inv(H.dot(curr_P).dot(H.T) + R))
@@ -158,6 +158,12 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     for n, sat_pos in enumerate(sat_ECEF):
         pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
 
+
+    # #Test info
+    # p0 = np.eye(8)
+    # S0 = p0.dot(H.T)
+    # alp_T = np.array([0,0,1,0,0,0,0,0])
+    # s0_T = alp_T.dot(S0)
     
     # Residuals (eq 26/eq 32 but using hx formula rather than Hx)
     res = sens_meas - pred_meas
@@ -176,6 +182,7 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     MeasErrCovSqrtInv = la.sqrtm(inv_R)
     SqrtResCov = la.sqrtm(res_cov)
 
+
     [U, s, V] = np.linalg.svd(MeasErrCovSqrtInv * SqrtResCov)
 
     alpha = s
@@ -183,9 +190,9 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     # Weighted Normal of Residual (Equation 33)
     wtd_norm_res = (res.T).dot(inv_R).dot(res)
 
-    return curr_x, curr_P, H, K, res_cov, alpha, wtd_norm_res
+    return curr_x, curr_P, K, H, alpha, res, wtd_norm_res
 
-def RAIM_chi2(curr_x, curr_P, R, H, K, res_win):
+def RAIM_chi2(res_win):
     '''
     This function handles the RAIM chi2 cumulative test statistic to verify statistic is
     within the threshold for Cumulative KF Test statistic
@@ -202,42 +209,34 @@ def RAIM_chi2(curr_x, curr_P, R, H, K, res_win):
     '''
     # Set window batch size
     win_size = 10
-    np.array(res_win)
+    res_win = np.asarray(res_win)
 
     # If array is bigger than win size delete earliest entry
     if len(res_win) > win_size:
-        np.delete(res_win, 0)
+        res_win = np.delete(res_win, 0)
 
     # Cumulative weighted norm residuals
     cum_res = sum(res_win)
 
-    # The identity matrix for the first part of residual covariance (for meas covariance)
-    I_pt1 = np.eye(len(R))
-
-    # The identity matrix for the second part of residual covariance (for state pred covariance)
-    I_pt2 = np.eye(len(P0))
-    
-
     ## Test statistic (RAIM Portion)
-    # Variance Covariance Matrix (inverse of weight matrix)
-    VCM = la.inv(H.dot(curr_P).dot(H.T) + R)
-    # P matrix variance and the r.TP^-1r (inverse scales and makes independent & process change std dev)
-    test_stat = (res.T).dot(VCM).dot(res)
     # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RAIM for Precision Approach)
     Pfa = 10e-4
 
     # Find inverse chi squared for threshold
-    thres = st.chi2.isf(q = 1-Pfa, df=num_SVs)
+    thres = st.chi2.isf(q = 1-Pfa, df=(num_SVs+win_size))
 
     # Check if test statistic is within chi squared model
-    if test_stat <= thres:
+    if cum_res < thres:
         print(f'Coordinate Point {i} is valid')
         
     else:
         print(f'Coordinate Point {i} is invalid')
-        print(f'Threshold: {thres},  Test Statistic: {test_stat}')
+        print(f'Threshold: {thres},  Test Statistic: {cum_res}')
 
-    return
+    # Convert back to list to use append
+    print(type(res_win))
+    res_list = res_win.tolist()
+    return res_list
 
 def plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt):
     t = np.arange(0, num_coords, s_dt)
@@ -380,22 +379,20 @@ pred_mat = np.zeros((num_coords, num_SVs))
 ## Make window size for residuals
 res_win = []
 
-
-
 for i in range(num_coords):
     # Pulling one per time step
     sens_meas = sens_meas_mat[i]
     truth = truth_mat[i]
 
     # EKF
-    curr_x, curr_P, H, K, res_cov, alpha, wtd_norm_res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
+    curr_x, curr_P, K, H, alpha, res, wtd_norm_res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
 
     # RAIM chi2 statistic check
     res_win.append(wtd_norm_res)
-    RAIM_chi2(curr_x, curr_P, R, H, K, res_win)
+    res_win = RAIM_chi2(res_win)
 
-    # # Update state and covariance
-    # curr_x = curr_x + K.dot(res)
+    # Update state and covariance
+    curr_x = curr_x + K.dot(res)
     curr_P = curr_P - K.dot(H).dot(curr_P)
 
 #Equation 32
@@ -404,11 +401,11 @@ for i in range(num_coords):
 
 #Equation 34
 
-    # Store for plotting
-    est_state_mat[i+1] = curr_x
-    est_cov_mat[i+1] = curr_P
-    pred_mat[i] = pred_meas
-    res_mat[i] = res
+# # Store for plotting
+# est_state_mat[i+1] = curr_x
+# est_cov_mat[i+1] = curr_P
+# pred_mat[i] = pred_meas
+# res_mat[i] = res
 
 # Plotting and Tables
 # Plot Psuedoranges of measurements and predicted measurements 
