@@ -66,7 +66,7 @@ def gen_truth(num_coords, x0, dt):
     
     return truth
 
-def gen_sensor_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
+def gen_sensor_meas(num, num_coords, sat_ECEF, truth, s_dt, Cdt):
     '''
     This function takes in an satellite coords, truth state, timing error, and satellite update speed 
     and outputs Psuedorange vector for each satellite update.
@@ -85,11 +85,38 @@ def gen_sensor_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
         usr_ECEF[i,0] = truth[i*s_dt,0]
         usr_ECEF[i,1] = truth[i*s_dt,2]
         usr_ECEF[i,2] = truth[i*s_dt,4]
-    
-    # Add random bias to satellite for anomaly (m)
-    sat_bias = 50
-    # How many secs/meas you want to add random bias to
-    num_bias = 10
+
+    ## Analysis bias and bias length
+    # Add random bias to satellite for anomaly
+    if num < 9:
+        sat_bias = 5.0
+        if num < 3:
+             num_bias = 10
+        if 3 <= num < 6:
+             num_bias = 15
+        if 6 <= num < 9:
+            num_bias = 20
+
+    if 9 <= num < 18:
+        sat_bias = 7.0
+        # How many secs/meas you want to add random bias to
+        if 9 <= num < 12:
+             num_bias = 10
+        if 12 <= num < 15:
+             num_bias = 15
+        if 15 <= num < 18:
+            num_bias = 20
+
+    if 18 <= num:
+        sat_bias = 9.0
+        # How many secs/meas you want to add random bias to
+        if 18 <= num < 21:
+             num_bias = 10
+        if 21 <= num < 24:
+             num_bias = 15
+        if 24 <= num:
+            num_bias = 20
+
 
     meas = np.zeros((len(usr_ECEF), len(sat_ECEF)))
     for i, usr_pos in enumerate(usr_ECEF):
@@ -106,7 +133,7 @@ def gen_sensor_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
     print(f'Where the anomally starts in timestep: {bias_sec}')
 
 
-    return meas
+    return sat_bias, num_bias, bias_sat, bias_sec, meas
 
 def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     '''
@@ -190,17 +217,13 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     [U, s, V] = np.linalg.svd(MeasErrCovSqrtInv * SqrtResCov)
 
     alpha = s
-
-    # Normalize Residual
-    diag_sqrtres = SqrtResCov.diagonal()
-    norm_res = res / diag_sqrtres
     
     # Weighted Normal of Residual (Equation 33)
-    wtd_norm_res = (norm_res.T).dot(inv_R).dot(norm_res)
+    wtd_norm_res = (res.T).dot(inv_R).dot(res)
 
     return curr_x, curr_P, K, H, alpha, res, wtd_norm_res
 
-def RAIM_chi2(res, res_win):
+def RAIM_chi2(res_win):
     '''
     This function handles the RAIM chi2 cumulative test statistic to verify statistic is
     within the threshold for Cumulative KF Test statistic
@@ -230,27 +253,20 @@ def RAIM_chi2(res, res_win):
     # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RAIM for Precision Approach)
     Pfa = 10e-4
 
-    # Find inverse chi squared for threshold (m)
-    thres = st.chi2.isf(q = 1-Pfa, df=(num_SVs*win_size))
-    # thres = 1.0
+    # Find inverse chi squared for threshold
+    # thres = st.chi2.isf(q = 1-Pfa, df=(num_SVs+win_size))
+    thres = 1.0
+    # thres = 1.5
+    # thres = 2.0
 
-    # Check if test statistic is within chi squared model for cumulative residual
+    # Check if test statistic is within chi squared model
     if cum_res < thres:
         print(f'Coordinate Point {i} is valid')
-        print(f'All SVs are valid')
-        print('\n')
         
     else:
         print(f'Coordinate Point {i} is invalid')
         print(f'Threshold: {thres},  Test Statistic: {cum_res}')
 
-        ## Sequential Local Testing
-        spoofed_sat = np.argmax(res)
-        spoofed_sat_res = np.max(np.absolute(res))
-        print(f'Satellite {spoofed_sat} is invalid')
-        print(f'{spoofed_sat_res} m off')
-        print('\n')
-        
     # Convert back to list to use append
     print(type(res_win))
     res_list = res_win.tolist()
@@ -265,7 +281,7 @@ def plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt):
     plt.plot(t, sens_meas_mat[:,0], label = "Truth")
     plt.plot(t, pred_mat[:,0], label = "Pred")
     plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
+    plt.ylabel('Psuedorange (km)')
     plt.legend()
 
     #Satellite 2 Psuedorange Plot
@@ -274,7 +290,7 @@ def plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt):
     plt.plot(t, sens_meas_mat[:,1], label = "Truth")
     plt.plot(t, pred_mat[:,1], label = "Pred")
     plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
+    plt.ylabel('Psuedorange (km)')
     plt.legend()
 
     #Satellite 3 Psuedorange Plot
@@ -283,7 +299,7 @@ def plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt):
     plt.plot(t, sens_meas_mat[:,2], label = "Truth")
     plt.plot(t, pred_mat[:,2], label = "Pred")
     plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
+    plt.ylabel('Psuedorange (km)')
     plt.legend()
 
     #Satellite 4 Psuedorange Plot
@@ -292,7 +308,7 @@ def plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt):
     plt.plot(t, sens_meas_mat[:,3], label = "Truth")
     plt.plot(t, pred_mat[:,3], label = "Pred")
     plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
+    plt.ylabel('Psuedorange (km)')
     plt.legend()
 
     #Satellite 5 Psuedorange Plot
@@ -301,7 +317,7 @@ def plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt):
     plt.plot(t, sens_meas_mat[:,4], label = "Truth")
     plt.plot(t, pred_mat[:,4], label = "Pred")
     plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
+    plt.ylabel('Psuedorange (km)')
     plt.legend()
 
     plt.show()
@@ -314,138 +330,140 @@ def plot_coords(truth_mat, est_state_mat):
     ax.scatter3D(truth_mat[:,0], truth_mat[:,2], truth_mat[:,4], label='Truth')
     ax.scatter3D(est_state_mat[:,0], est_state_mat[:,2], est_state_mat[:,4], label='Pred')
     ax.set_title('User coordinates (ECEF)')
-    ax.set_xlabel('x-coords (m)')
-    ax.set_ylabel('y-coords (m)')
-    ax.set_zlabel('z-coords (m)')
+    ax.set_xlabel('x-coords (km)')
+    ax.set_ylabel('y-coords (km)')
+    ax.set_zlabel('z-coords (km)')
     ax.legend(loc='best')
     
     plt.show()
     return
 
-def plot_res(thres_mat, cum_res_mat, num_coords, s_dt):
+def plot_res(num, bias_var, len_bias, bias_sat, bias_start, thres_mat, cum_res_mat, num_coords, s_dt):
     t = np.arange(0, num_coords, s_dt)
 
     #Plotting residual and threshold each timestep
     plt.figure()
-    plt.title('Cumulative Residual vs Time')
+    plt.title('Cumulative Residual vs Time | Satellite w/ Bias: ' +str(bias_sat)+ ', Bias: ' +str(bias_var)+ ', Bias Length: ' +str(len_bias))
     plt.plot(t, cum_res_mat[:], label = "Cum Residual")
     plt.plot(t, thres_mat[:], label = "Threshold")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('Cumulative Residual (m)')
+    plt.xlabel('Time (secs) | Bias Start: ' +str(bias_start))
+    plt.ylabel('Cumulative Residual (km)')
     plt.legend()
 
+    plt.savefig('C:/Users/niles/Desktop/Thesis/RAIM_chi2/residual_analysis/threshold1/thres1_' + str(num))
     plt.show()
 
     return
 
-## SET UP
-# number of satellites
-num_SVs = 6
-# satellite timestep (update rate)
-s_dt = 1
-# number of coordinates/steps from user not including initial
-num_coords = 100
-# user timestep
-dt = 1.0
-# user constant velocity/starting velocity (m/s)
-usr_vel = 25.0
-# user starting ECEF coordinate (m)
-usr_x0 = np.array([-681000, -4925000, 3980000])
-# speed of light (m/s)
-C = 299792458.0
-# Psuedorange bias
-Cdt = 0.0
-# Psuedorange bias velocity
-Cdt_dot = 0.0
-# Pseudorange std dev
-Pr_std = 0.0
-# White noise from random walk position velocity error
-Sp = 5.0
-# White noise from random walk clock bias error (Cdt)
-Sf = 36
-# White noise from random walk clock drift error (Cdt_dot)
-Sg = 0.01
-# Pseudorange measurement error equal variance
-rho_error = 36
+
+for num in range(27):
+    ## SET UP
+    # number of satellites
+    num_SVs = 5
+    # satellite timestep (update rate)
+    s_dt = 1
+    # number of coordinates/steps from user not including initial
+    num_coords = 100
+    # user timestep
+    dt = 1.0
+    # user constant velocity/starting velocity (m/s)
+    usr_vel = 25.0
+    # user starting ECEF coordinate (km)
+    usr_x0 = np.array([-681, -4925, 3980])
+    # speed of light (m/s)
+    C = 299792458.0
+    # Psuedorange bias
+    Cdt = 0.0
+    # Psuedorange bias velocity
+    Cdt_dot = 0.0
+    # Pseudorange std dev
+    Pr_std = 0.0
+    # White noise from random walk position velocity error
+    Sp = 5.0
+    # White noise from random walk clock bias error (Cdt)
+    Sf = 36
+    # White noise from random walk clock drift error (Cdt_dot)
+    Sg = 0.01
+    # Pseudorange measurement error equal variance
+    rho_error = 36
 
 
-# Initial State and Initial Covariance
-init_usr_vel = usr_vel * np.random.randn(3)
-x0 = np.array([usr_x0[0], init_usr_vel[0], usr_x0[1], init_usr_vel[1], usr_x0[2], init_usr_vel[2], Cdt, Cdt_dot])
-P0 = np.eye(8)
+    # Initial State and Initial Covariance
+    init_usr_vel = usr_vel * np.random.randn(3)
+    x0 = np.array([usr_x0[0], init_usr_vel[0], usr_x0[1], init_usr_vel[1], usr_x0[2], init_usr_vel[2], Cdt, Cdt_dot])
+    P0 = np.eye(8)
 
-# Get sat coordinates, truth data of states and pseudorange measurements
-sat_ECEF = gen_sat_ecef(num_SVs)
-truth_mat = gen_truth(num_coords, x0, dt)
-sens_meas_mat = gen_sensor_meas(num_coords, sat_ECEF, truth_mat, s_dt, Cdt)
+    # Get sat coordinates, truth data of states and pseudorange measurements
+    sat_ECEF = gen_sat_ecef(num_SVs)
+    truth_mat = gen_truth(num_coords, x0, dt)
+    bias_var, len_bias, bias_sat, bias_start, sens_meas_mat = gen_sensor_meas(num, num_coords, sat_ECEF, truth_mat, s_dt, Cdt)
 
-# Set current state and current covariance
-curr_x = x0
-curr_P = P0 
+    # Set current state and current covariance
+    curr_x = x0
+    curr_P = P0 
 
-# Build State Error Covariance Matrix
-Qxyz = np.array([[Sp * (dt**3)/3, Sp * (dt**2)/2],  [Sp * (dt**2)/2, Sp * dt]])
-Qb = np.array([[Sf*dt + (Sg * dt**3)/3, (Sg * dt**2)/2],  [(Sg * dt**2)/2, (Sg * dt)]])
+    # Build State Error Covariance Matrix
+    Qxyz = np.array([[Sp * (dt**3)/3, Sp * (dt**2)/2],  [Sp * (dt**2)/2, Sp * dt]])
+    Qb = np.array([[Sf*dt + (Sg * dt**3)/3, (Sg * dt**2)/2],  [(Sg * dt**2)/2, (Sg * dt)]])
 
-Q = np.zeros((len(curr_x),len(curr_x)))
-Q[:2,:2] = Qxyz
-Q[2:4,2:4] = Qxyz
-Q[4:6,4:6] = Qxyz
-Q[6:,6:] = Qb
+    Q = np.zeros((len(curr_x),len(curr_x)))
+    Q[:2,:2] = Qxyz
+    Q[2:4,2:4] = Qxyz
+    Q[4:6,4:6] = Qxyz
+    Q[6:,6:] = Qb
 
-# Build Measurement Error Covariance Matrix
-R = np.eye(num_SVs) * rho_error
+    # Build Measurement Error Covariance Matrix
+    R = np.eye(num_SVs) * rho_error
 
-# Build User Estimated States Matrix
-est_state_mat = np.zeros((num_coords+1, 8))
-est_state_mat[0] = curr_x
+    # Build User Estimated States Matrix
+    est_state_mat = np.zeros((num_coords+1, 8))
+    est_state_mat[0] = curr_x
 
-# Build Estimated Covariance Matirx
-est_cov_mat = np.zeros((num_coords+1, 8, 8))
-est_cov_mat[0] = curr_P
+    # Build Estimated Covariance Matirx
+    est_cov_mat = np.zeros((num_coords+1, 8, 8))
+    est_cov_mat[0] = curr_P
 
-# Residual matrix
-res_mat = np.zeros((num_coords, num_SVs))
-cum_res_mat = np.zeros((num_coords))
-thres_mat = np.zeros((num_coords))
+    # Residual matrix
+    res_mat = np.zeros((num_coords, num_SVs))
+    cum_res_mat = np.zeros((num_coords))
+    thres_mat = np.zeros((num_coords))
 
-# Predicted Pseudorange Matrix
-pred_mat = np.zeros((num_coords, num_SVs))
+    # Predicted Pseudorange Matrix
+    pred_mat = np.zeros((num_coords, num_SVs))
 
-## Make window size for residuals
-res_win = []
+    ## Make window size for residuals
+    res_win = []
+    for i in range(num_coords):
+        # Pulling one per time step
+        sens_meas = sens_meas_mat[i]
+        truth = truth_mat[i]
 
-for i in range(num_coords):
-    # Pulling one per time step
-    sens_meas = sens_meas_mat[i]
-    truth = truth_mat[i]
+        # EKF
+        curr_x, curr_P, K, H, alpha, res, wtd_norm_res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
 
-    # EKF
-    curr_x, curr_P, K, H, alpha, res, wtd_norm_res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
+        # RAIM chi2 statistic check
+        res_win.append(wtd_norm_res)
+        res_win, cum_res, thres = RAIM_chi2(res_win)
 
-    # RAIM chi2 statistic check
-    res_win.append(wtd_norm_res)
-    res_win, cum_res, thres = RAIM_chi2(res, res_win)
+        # Update state and covariance
+        curr_x = curr_x + K.dot(res)
+        curr_P = curr_P - K.dot(H).dot(curr_P)
 
-    # Update state and covariance
-    curr_x = curr_x + K.dot(res)
-    curr_P = curr_P - K.dot(H).dot(curr_P)
+        # # Store for plotting
+        cum_res_mat[i] = cum_res
+        thres_mat[i] = thres
+        # est_state_mat[i+1] = curr_x
+        # est_cov_mat[i+1] = curr_P
+        # pred_mat[i] = pred_meas
+        # res_mat[i] = res
 
-    # # Store for plotting
-    cum_res_mat[i] = cum_res
-    thres_mat[i] = thres
-    # est_state_mat[i+1] = curr_x
-    # est_cov_mat[i+1] = curr_P
-    # pred_mat[i] = pred_meas
-    # res_mat[i] = res
-
-# Plotting and Tables
-# Plot Psuedoranges of measurements and predicted measurements 
-# plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt)
-# Plot Truth coordinates to Predicted Coordinates
-# plot_coords(truth_mat, est_state_mat)
-# Plot Cumulative Residual over time
-plot_res(thres_mat, cum_res_mat, num_coords, s_dt)
-# Convert Residual data to CSV for Excel Table
-#np.savetxt("residuals.csv", res_mat, delimiter=",")
+    # Plotting and Tables
+    # Plot Psuedoranges of measurements and predicted measurements 
+    # plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt)
+    # Plot Truth coordinates to Predicted Coordinates
+    # plot_coords(truth_mat, est_state_mat)
+    # Plot Cumulative Residual over time
+    plot_res(num, bias_var, len_bias, bias_sat, bias_start, thres_mat, cum_res_mat, num_coords, s_dt)
+    # Convert Residual data to CSV for Excel Table
+    #np.savetxt("residuals.csv", res_mat, delimiter=",")
 
