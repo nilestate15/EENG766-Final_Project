@@ -1,3 +1,4 @@
+import re
 import numpy as np
 from numpy.lib.shape_base import _column_stack_dispatcher
 import scipy.linalg as la
@@ -27,9 +28,12 @@ def gen_sat_ecef(num_SVs):
                 [20e7, 20e7, 10e7],
                 [-20e7, -10e7, 10e7]]
 
-    sat_ECEF = random.sample(ECEF_list,num_SVs)
+    # Choose random 5 ECEF for chosen satellites
+    mixed_ECEF = random.sample(ECEF_list, len(ECEF_list))
+    chose_sat_ECEF = mixed_ECEF[:num_SVs]
+    reserve_sat_ECEF = mixed_ECEF[num_SVs:]
 
-    return sat_ECEF
+    return chose_sat_ECEF, reserve_sat_ECEF
 
 
 def gen_truth(num_coords, x0, dt):
@@ -66,7 +70,7 @@ def gen_truth(num_coords, x0, dt):
     
     return truth
 
-def gen_sensor_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
+def gen_sensor_meas(num_coords, chose_sat_ECEF, truth, s_dt, Cdt):
     '''
     This function takes in an satellite coords, truth state, timing error, and satellite update speed 
     and outputs Psuedorange vector for each satellite update.
@@ -91,13 +95,15 @@ def gen_sensor_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
     # How many secs/meas you want to add random bias to
     num_bias = 10
 
-    meas = np.zeros((len(usr_ECEF), len(sat_ECEF)))
+    # Pseudoranges from the chosen ECEF
+    meas = np.zeros((len(usr_ECEF), len(chose_sat_ECEF)))
     for i, usr_pos in enumerate(usr_ECEF):
-        for n, sat_pos in enumerate(sat_ECEF):
+        for n, sat_pos in enumerate(chose_sat_ECEF):
             meas[i,n] = np.sqrt((sat_pos[0] - usr_pos[0])**2 + (sat_pos[1] - usr_pos[1])**2 + (sat_pos[2] - usr_pos[2])**2) + Cdt
-    
+
+
     # Pick random spot in meas data and add satellite bias to
-    bias_sat = random.randint(0, len(sat_ECEF)-1)
+    bias_sat = random.randint(0, len(chose_sat_ECEF)-1)
     bias_sec = random.randint(0, len(meas)-num_bias)
     meas[bias_sec:bias_sec+(num_bias-1), bias_sat] = meas[bias_sec:bias_sec+(num_bias-1), bias_sat] + sat_bias
 
@@ -106,9 +112,9 @@ def gen_sensor_meas(num_coords, sat_ECEF, truth, s_dt, Cdt):
     print(f'Where the anomally starts in timestep: {bias_sec}')
 
 
-    return meas
+    return usr_ECEF, meas
 
-def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
+def EKF(chose_sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     '''
     This function handles the EKF process of the RAIM and returns the H matrix (meas matrix) and residuals
 
@@ -139,7 +145,7 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
 
     # Build H Matrix (Measurement Matrix)
     H = np.zeros((num_SVs, len(curr_x)))
-    for cnt, sat_pos in enumerate(sat_ECEF):
+    for cnt, sat_pos in enumerate(chose_sat_ECEF):
         part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
         part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
         part_z = -(sat_pos[2] - curr_x[4]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
@@ -158,8 +164,8 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
     K = (curr_P.dot(H.T)).dot(la.inv(H.dot(curr_P).dot(H.T) + R))
 
     # Predicted Pseudorange Measurement (h(x) formula)
-    pred_meas = np.zeros(len(sat_ECEF))
-    for n, sat_pos in enumerate(sat_ECEF):
+    pred_meas = np.zeros(len(chose_sat_ECEF))
+    for n, sat_pos in enumerate(chose_sat_ECEF):
         pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
 
 
@@ -191,16 +197,17 @@ def EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R):
 
     alpha = s
 
-    # Normalize Residual
+    ## Normalize Residual
+    # Standard Deviation of State
     diag_sqrtres = SqrtResCov.diagonal()
     norm_res = res / diag_sqrtres
     
     # Weighted Normal of Residual (Equation 33)
     wtd_norm_res = (norm_res.T).dot(inv_R).dot(norm_res)
 
-    return curr_x, curr_P, K, H, alpha, res, wtd_norm_res
+    return curr_x, curr_P, K, H, alpha, res, wtd_norm_res, pred_meas, diag_sqrtres
 
-def RAIM_chi2(res, res_win):
+def RAIM_chi2_global(res, res_win):
     '''
     This function handles the RAIM chi2 cumulative test statistic to verify statistic is
     within the threshold for Cumulative KF Test statistic
@@ -213,7 +220,9 @@ def RAIM_chi2(res, res_win):
         res: an (num sat,) array of the residuals of the pseudorange measurements
 
     Returns:
-        nothing
+        res_list:
+        cum_thres:
+        thres:
     '''
     # Set window batch size
     win_size = 10
@@ -234,27 +243,52 @@ def RAIM_chi2(res, res_win):
     thres = st.chi2.isf(q = 1-Pfa, df=(num_SVs*win_size))
     # thres = 1.0
 
-    # Check if test statistic is within chi squared model for cumulative residual
-    if cum_res < thres:
-        print(f'Coordinate Point {i} is valid')
-        print(f'All SVs are valid')
-        print('\n')
-        
-    else:
-        print(f'Coordinate Point {i} is invalid')
-        print(f'Threshold: {thres},  Test Statistic: {cum_res}')
-
-        ## Sequential Local Testing
-        spoofed_sat = np.argmax(res)
-        spoofed_sat_res = np.max(np.absolute(res))
-        print(f'Satellite {spoofed_sat} is invalid')
-        print(f'{spoofed_sat_res} m off')
-        print('\n')
+    # spoofed_sat = np.argmax(res)
+    # spoofed_sat_res = np.max(np.absolute(res))
+    # print(f'Satellite {spoofed_sat} is invalid')
+    # print(f'{spoofed_sat_res} m off')
+    # print('\n')
         
     # Convert back to list to use append
     print(type(res_win))
     res_list = res_win.tolist()
     return res_list, cum_res, thres
+
+def local_seq_test(i, reserve_sat_ECEF, chose_sat_ECEF, usr_ECEF, Cdt, sens_meas_mat, spoofed_sat):
+    '''
+    This function handles the RAIM sequential local test that will sequentially verify each 
+    of the original chosen satellites to detect and exclude the satellite that has a bias.
+
+    Args:
+        i: an int that shows the timestep/number of the coordinate/user ECEF currently
+        reserve_sat_ECEF: an (n,3) array of the reserved satellites position that weren't originally chosen
+        usr_ECEF: a (num_coords,3) array of user position
+        Cdt: set clock error 
+        pred_meas: an (num sat,) array of predicted pseudoranges to find residuals
+        diag_sqrtres: an (num sat,) array of the standard deviation of the state (diagonal of sqrt residuals)
+        res_win: an (>=10,) array of the residuals of the pseudorange measurements based on a chosen window size
+
+    Returns:
+        nothing
+    '''
+
+    # Pull a satellite from reserved satellite list and add to chose list
+    res_sat = reserve_sat_ECEF[0]
+    del reserve_sat_ECEF[0]
+    chose_sat_ECEF[spoofed_sat] = res_sat
+
+    # Find Pseudorange for reserve satellites
+    res_meas_cnt = len(usr_ECEF) - i
+    res_meas = np.zeros(res_meas_cnt)
+    for n in range(len(res_meas)):
+        # Pseudoranges from the chosen ECEF
+        usr_pos = usr_ECEF[i+n, :]
+        res_meas[n] = np.sqrt((res_sat[0] - usr_pos[0])**2 + (res_sat[1] - usr_pos[1])**2 + (res_sat[2] - usr_pos[2])**2) + Cdt
+
+    # Replace biased satellite measurements with new reserved measurements
+    sens_meas_mat[i:, spoofed_sat] = res_meas
+        
+    return chose_sat_ECEF, sens_meas_mat
 
 def plot_pseudo(sens_meas_mat, pred_mat, num_coords, s_dt):
     t = np.arange(0, num_coords, s_dt)
@@ -340,7 +374,7 @@ def plot_res(thres_mat, cum_res_mat, num_coords, s_dt):
 
 ## SET UP
 # number of satellites
-num_SVs = 6
+num_SVs = 5
 # satellite timestep (update rate)
 s_dt = 1
 # number of coordinates/steps from user not including initial
@@ -375,9 +409,9 @@ x0 = np.array([usr_x0[0], init_usr_vel[0], usr_x0[1], init_usr_vel[1], usr_x0[2]
 P0 = np.eye(8)
 
 # Get sat coordinates, truth data of states and pseudorange measurements
-sat_ECEF = gen_sat_ecef(num_SVs)
+chose_sat_ECEF, reserve_sat_ECEF = gen_sat_ecef(num_SVs)
 truth_mat = gen_truth(num_coords, x0, dt)
-sens_meas_mat = gen_sensor_meas(num_coords, sat_ECEF, truth_mat, s_dt, Cdt)
+usr_ECEF, sens_meas_mat = gen_sensor_meas(num_coords, chose_sat_ECEF, truth_mat, s_dt, Cdt)
 
 # Set current state and current covariance
 curr_x = x0
@@ -421,11 +455,29 @@ for i in range(num_coords):
     truth = truth_mat[i]
 
     # EKF
-    curr_x, curr_P, K, H, alpha, res, wtd_norm_res = EKF(sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
+    curr_x, curr_P, K, H, alpha, res, wtd_norm_res, pred_meas, diag_sqrtres = EKF(chose_sat_ECEF, sens_meas, curr_x, curr_P, Q, R)
 
-    # RAIM chi2 statistic check
+    # RAIM chi2 global statistic check
     res_win.append(wtd_norm_res)
-    res_win, cum_res, thres = RAIM_chi2(res, res_win)
+    res_win, cum_res, thres = RAIM_chi2_global(res, res_win)
+
+    # Check if test statistic is within chi squared model for cumulative residual
+    if cum_res < thres:
+        print(f'Coordinate Point {i} is valid')
+        print(f'All SVs are valid')
+        print('\n')
+        
+    else:
+        spoofed_sat = np.argmax(res)
+        spoofed_sat_res = np.max(np.absolute(res))
+        print(f'Coordinate Point {i} is invalid')
+        print(f'Satellite {spoofed_sat} issue')
+        print(f'{spoofed_sat_res} m off')
+        print('\n')
+
+        # RAIM chi2 sequential local statistic check
+        chose_sat_ECEF, sens_meas_mat = local_seq_test(i, reserve_sat_ECEF, chose_sat_ECEF, usr_ECEF, Cdt, sens_meas_mat, spoofed_sat)
+
 
     # Update state and covariance
     curr_x = curr_x + K.dot(res)
