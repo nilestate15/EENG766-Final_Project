@@ -1,4 +1,3 @@
-import re
 import numpy as np
 from numpy.lib.shape_base import _column_stack_dispatcher
 import scipy.linalg as la
