@@ -2,9 +2,10 @@ import numpy as np
 from numpy.lib.shape_base import _column_stack_dispatcher
 import scipy.linalg as la
 import random
-from math import pi
+from math import pi, sin, cos
 import scipy.stats as st
 import matplotlib.pyplot as plt
+import pandas as pd
 
 def gen_sat_ecef(num_SVs):
     '''
@@ -34,6 +35,102 @@ def gen_sat_ecef(num_SVs):
 
     return chose_sat_ECEF, reserve_sat_ECEF
 
+
+def gen_flight_data(num_SVs, ENU_cfp, ENU_cfp_ECEF):
+    '''
+    This function loads in pseudoranges and satellite ENU data for the 7 different satellites.
+    It also loads in the truth data of the aircraft as well.
+
+    Args:
+        
+
+    Returns:
+        
+    '''
+    # Read in L1 pseudoranges for satellites (16,22,9,4,31,26,3)
+    GPS_PR = pd.read_csv('./L1_L2_Sats.csv', usecols=[1,6,11,16,21,26,31]).to_numpy()
+
+    # Read in each ENU satellite position data
+    GPS16 = pd.read_csv('./L1_L2_Sats.csv', usecols=[3,4,5]).to_numpy()
+    GPS22 = pd.read_csv('./L1_L2_Sats.csv', usecols=[8,9,10]).to_numpy()
+    GPS9 = pd.read_csv('./L1_L2_Sats.csv', usecols=[13,14,15]).to_numpy()
+    GPS4 = pd.read_csv('./L1_L2_Sats.csv', usecols=[18,19,20]).to_numpy()
+    GPS31 = pd.read_csv('./L1_L2_Sats.csv', usecols=[23,24,25]).to_numpy()
+    GPS26 = pd.read_csv('./L1_L2_Sats.csv', usecols=[28,29,30]).to_numpy()
+    GPS3 = pd.read_csv('./L1_L2_Sats.csv', usecols=[33,34,35]).to_numpy()
+
+    ## Read in truth data
+    # Read in ENU aircraft position data
+    AC_ENU = pd.read_csv('./L1_L2_Sats.csv', usecols=[36,37,38]).to_numpy()
+    # Read in aircraft velocity data (NED) and convert to ENU
+    cols_used = ['velocity_north','velocity_east','velocity_down']
+    col_reorder = ['velocity_east','velocity_north','velocity_down']
+    AC_vel = pd.read_csv('./GNSS_PLANE_wed-flight3.csv', usecols=cols_used)[col_reorder].to_numpy()
+    # Change from 5hz of data to 1hz of data to match aircraft ENU data
+    AC_vel = AC_vel[4:7560:5]
+    # Convert DOWN into UP
+    AC_vel[:, 2] *= -1
+
+    # Read in Geodetic coordinates 
+    AC_GD = pd.read_csv('./GNSS_PLANE_wed-flight3.csv', usecols=[6,7,8]).to_numpy()
+    # Change from 5hz of data to 1hz of data to match aircraft ENU data
+    AC_GD = AC_GD[4:7560:5]
+    
+    # Convert AC position from ENU to ECEF
+    AC_ECEF = enu2ecef_pos(AC_ENU, ENU_cfp, ENU_cfp_ECEF)
+    
+    # Convert Satellite positions from ENU to ECEF
+    GPS16_ECEF = enu2ecef_pos(GPS16, ENU_cfp, ENU_cfp_ECEF)
+    GPS22_ECEF = enu2ecef_pos(GPS22, ENU_cfp, ENU_cfp_ECEF)
+    GPS9_ECEF = enu2ecef_pos(GPS9, ENU_cfp, ENU_cfp_ECEF)
+    GPS4_ECEF = enu2ecef_pos(GPS4, ENU_cfp, ENU_cfp_ECEF)
+    GPS31_ECEF = enu2ecef_pos(GPS31, ENU_cfp, ENU_cfp_ECEF)
+    GPS26_ECEF = enu2ecef_pos(GPS26, ENU_cfp, ENU_cfp_ECEF)
+    GPS3_ECEF = enu2ecef_pos(GPS3, ENU_cfp, ENU_cfp_ECEF)
+
+    # Convert AC velocity ENU to ECEF
+    AC_vel_ECEF = enu2ecef_vel(AC_vel, ENU_cfp)
+
+    # Pull timestamp from data to produce dt
+    GPS_time = pd.read_csv('./L1_L2_Sats.csv', usecols=[0]).to_numpy()
+    # Create dt
+    AC_dt = np.zeros(len(GPS_time))
+    for n in range(len(GPS_time)-1):
+        AC_dt[n] = GPS_time[n+1] - GPS_time[n]
+
+    # Create truth matrix
+    truth_table = np.zeros((len(AC_ECEF), 8))
+    
+    print('hello')
+        
+
+def enu2ecef_vel(AC_vel, ENU_cfp):
+    
+    AC_ECEF_vel = np.zeros((len(AC_vel), 3))
+    for i in range(len(AC_vel)):
+        ECEF_conv = np.array([[-sin(ENU_cfp[1]), -sin(ENU_cfp[0])*cos(ENU_cfp[1]), cos(ENU_cfp[0])*cos(ENU_cfp[1])],
+                            [cos(ENU_cfp[1]), -sin(ENU_cfp[0])*sin(ENU_cfp[1]), cos(ENU_cfp[0])*sin(ENU_cfp[1])],
+                            [0.0, cos(ENU_cfp[0]), sin(ENU_cfp[0])]])
+
+        ENU_vel = AC_vel[i]
+        ECEF_vel = ECEF_conv.dot(ENU_vel)
+        AC_ECEF_vel[i, :] = ECEF_vel 
+    
+    return AC_ECEF_vel
+
+def enu2ecef_pos(ENU_data, ENU_cfp, ENU_cfp_ECEF):
+    
+    ECEF_data = np.zeros((len(ENU_data), 3))
+    for i in range(len(ENU_data)):
+        ECEF_conv = np.array([[-sin(ENU_cfp[1]), -sin(ENU_cfp[0])*cos(ENU_cfp[1]), cos(ENU_cfp[0])*cos(ENU_cfp[1])],
+                            [cos(ENU_cfp[1]), -sin(ENU_cfp[0])*sin(ENU_cfp[1]), cos(ENU_cfp[0])*sin(ENU_cfp[1])],
+                            [0.0, cos(ENU_cfp[0]), sin(ENU_cfp[0])]])
+
+        ENU_coord = ENU_data[i]
+        ECEF_coords = ECEF_conv.dot(ENU_coord) + ENU_cfp_ECEF 
+        ECEF_data[i, :] = ECEF_coords 
+    
+    return ECEF_data
 
 def gen_truth(num_coords, x0, dt):
     '''
@@ -374,6 +471,10 @@ def plot_res(thres_mat, cum_res_mat, num_coords, s_dt):
 ## SET UP
 # number of satellites
 num_SVs = 5
+# ENU Center fixed point (Geodetic Coords in radians)
+ENU_cfp = np.array([0.68667326519, -1.5011475667, 192.00])
+# ENU Center fixed point (ECEF km) matlab conversion
+ENU_cfp_ECEF = np.array([343744.28, -4927413.92, 4022001.33])
 # satellite timestep (update rate)
 s_dt = 1
 # number of coordinates/steps from user not including initial
@@ -409,6 +510,7 @@ P0 = np.eye(8)
 
 # Get sat coordinates, truth data of states and pseudorange measurements
 chose_sat_ECEF, reserve_sat_ECEF = gen_sat_ecef(num_SVs)
+gen_flight_data(num_SVs, ENU_cfp, ENU_cfp_ECEF)
 truth_mat = gen_truth(num_coords, x0, dt)
 usr_ECEF, sens_meas_mat = gen_sensor_meas(num_coords, chose_sat_ECEF, truth_mat, s_dt, Cdt)
 
