@@ -50,53 +50,58 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     Returns:
         
     '''
-    # Read in L1 pseudoranges for satellites (16,22,9,4,31,26,3)
-    GPS_PR = pd.read_csv('./L1_L2_Sats.csv', usecols=[1,6,11,16,21,26,31]).to_numpy()
-    # Pull out initial psuedorange
-    GPS_PR_0 = GPS_PR[0,:]
-    # Remove initial psuedorange
-    GPS_PR = GPS_PR[1::]
+    # Read in L1 pseudoranges for satellites (3,4,9,16,22,26,27,31)
+    GPS_PR = pd.read_csv('./PRtrunc_resize.csv', header= None, usecols=[3]).to_numpy()
 
-    # Read in each ENU satellite position data and pull out the initial locations
-    GPS16 = pd.read_csv('./L1_L2_Sats.csv', usecols=[3,4,5], skiprows=1).to_numpy()
-    GPS22 = pd.read_csv('./L1_L2_Sats.csv', usecols=[8,9,10], skiprows=1).to_numpy()
-    GPS9 = pd.read_csv('./L1_L2_Sats.csv', usecols=[13,14,15], skiprows=1).to_numpy()
-    GPS4 = pd.read_csv('./L1_L2_Sats.csv', usecols=[18,19,20], skiprows=1).to_numpy()
-    GPS31 = pd.read_csv('./L1_L2_Sats.csv', usecols=[23,24,25], skiprows=1).to_numpy()
-    GPS26 = pd.read_csv('./L1_L2_Sats.csv', usecols=[28,29,30], skiprows=1).to_numpy()
-    GPS3 = pd.read_csv('./L1_L2_Sats.csv', usecols=[33,34,35], skiprows=1).to_numpy()
+    # Pull out initial psuedorange
+    GPS_PR_0 = GPS_PR[0:8,:]
+    # Remove initial psuedorange
+    GPS_PR = GPS_PR[8::]
+
+    # Read in each ENU satellite position data (3,4,9,16,22,26,27,31)
+    GPS_pos_mat = pd.read_csv('./SV_ENU0trunc_resize.csv', header= None, usecols=[3,4,5]).to_numpy()
+
+    # GPS16 = pd.read_csv('./L1_L2_Sats.csv', usecols=[3,4,5], skiprows=1).to_numpy()
+    # GPS22 = pd.read_csv('./L1_L2_Sats.csv', usecols=[8,9,10], skiprows=1).to_numpy()
+    # GPS9 = pd.read_csv('./L1_L2_Sats.csv', usecols=[13,14,15], skiprows=1).to_numpy()
+    # GPS4 = pd.read_csv('./L1_L2_Sats.csv', usecols=[18,19,20], skiprows=1).to_numpy()
+    # GPS31 = pd.read_csv('./L1_L2_Sats.csv', usecols=[23,24,25], skiprows=1).to_numpy()
+    # GPS26 = pd.read_csv('./L1_L2_Sats.csv', usecols=[28,29,30], skiprows=1).to_numpy()
+    # GPS3 = pd.read_csv('./L1_L2_Sats.csv', usecols=[33,34,35], skiprows=1).to_numpy()
    
-    GPS_pos0 = pd.read_csv('./L1_L2_Sats.csv', usecols=[3,4,5,8,9,10,13,14,15,18,19,20,23,24,25,28,29,30,33,34,35], nrows=1).to_numpy()
-    GPS_pos0 = GPS_pos0.reshape((7,3))
+    # GPS_pos0 = pd.read_csv('./L1_L2_Sats.csv', usecols=[3,4,5,8,9,10,13,14,15,18,19,20,23,24,25,28,29,30,33,34,35], nrows=1).to_numpy()
+    # GPS_pos0 = GPS_pos0.reshape((7,3))
 
     # Convert Satellite positions from ENU to ECEF
-    GPS16_ECEF = enu2ecef_pos(GPS16, ENU_cfp, ENU_cfp_ECEF)
-    GPS22_ECEF = enu2ecef_pos(GPS22, ENU_cfp, ENU_cfp_ECEF)
-    GPS9_ECEF = enu2ecef_pos(GPS9, ENU_cfp, ENU_cfp_ECEF)
-    GPS4_ECEF = enu2ecef_pos(GPS4, ENU_cfp, ENU_cfp_ECEF)
-    GPS31_ECEF = enu2ecef_pos(GPS31, ENU_cfp, ENU_cfp_ECEF)
-    GPS26_ECEF = enu2ecef_pos(GPS26, ENU_cfp, ENU_cfp_ECEF)
-    GPS3_ECEF = enu2ecef_pos(GPS3, ENU_cfp, ENU_cfp_ECEF)
-    GPS_pos0_ECEF = enu2ecef_pos(GPS_pos0, ENU_cfp, ENU_cfp_ECEF)
+    GPS_pos_matrix = enu2ecef_pos(GPS_pos_mat, ENU_cfp, ENU_cfp_ECEF)
+    # Pull out initial GPS positions
+    GPS_pos_0 = GPS_pos_matrix[0:8,:]
+    # Remove initial GPS positions
+    GPS_pos_matrix = GPS_pos_matrix[8::]
+
+    # GPS16_ECEF = enu2ecef_pos(GPS16, ENU_cfp, ENU_cfp_ECEF)
+    # GPS22_ECEF = enu2ecef_pos(GPS22, ENU_cfp, ENU_cfp_ECEF)
+    # GPS9_ECEF = enu2ecef_pos(GPS9, ENU_cfp, ENU_cfp_ECEF)
+    # GPS4_ECEF = enu2ecef_pos(GPS4, ENU_cfp, ENU_cfp_ECEF)
+    # GPS31_ECEF = enu2ecef_pos(GPS31, ENU_cfp, ENU_cfp_ECEF)
+    # GPS26_ECEF = enu2ecef_pos(GPS26, ENU_cfp, ENU_cfp_ECEF)
+    # GPS3_ECEF = enu2ecef_pos(GPS3, ENU_cfp, ENU_cfp_ECEF)
+    # GPS_pos0_ECEF = enu2ecef_pos(GPS_pos0, ENU_cfp, ENU_cfp_ECEF)
     
     # Make initial GPS position matrix and GPS location matrix based on timestamp
-    GPS_pos_matrix = np.zeros((len(GPS_pos0_ECEF)*len(GPS16_ECEF), len(GPS_pos0_ECEF[0])))
-    for i in range(len(GPS16_ECEF)):
-        GPS_pos_matrix[i*7,:] = GPS16_ECEF[i,:]
-        GPS_pos_matrix[i*7+1,:] = GPS22_ECEF[i,:]
-        GPS_pos_matrix[i*7+2,:] = GPS9_ECEF[i,:]
-        GPS_pos_matrix[i*7+3,:] = GPS4_ECEF[i,:]
-        GPS_pos_matrix[i*7+4,:] = GPS31_ECEF[i,:]
-        GPS_pos_matrix[i*7+5,:] = GPS26_ECEF[i,:]
-        GPS_pos_matrix[i*7+6,:] = GPS3_ECEF[i,:]
+    # GPS_pos_matrix = np.zeros((len(GPS_pos0_ECEF)*len(GPS16_ECEF), len(GPS_pos0_ECEF[0])))
+    # for i in range(len(GPS16_ECEF)):
+    #     GPS_pos_matrix[i*7,:] = GPS16_ECEF[i,:]
+    #     GPS_pos_matrix[i*7+1,:] = GPS22_ECEF[i,:]
+    #     GPS_pos_matrix[i*7+2,:] = GPS9_ECEF[i,:]
+    #     GPS_pos_matrix[i*7+3,:] = GPS4_ECEF[i,:]
+    #     GPS_pos_matrix[i*7+4,:] = GPS31_ECEF[i,:]
+    #     GPS_pos_matrix[i*7+5,:] = GPS26_ECEF[i,:]
+    #     GPS_pos_matrix[i*7+6,:] = GPS3_ECEF[i,:]
 
     ## Read in truth data
     # Read in ENU aircraft position data
-    AC_ENU = pd.read_csv('./L1_L2_Sats.csv', usecols=[36,37,38]).to_numpy()
-    # Read in Geodetic coordinates 
-    AC_GD = pd.read_csv('./GNSS_PLANE_wed-flight3.csv', usecols=[6,7,8]).to_numpy()
-    # Change from 5hz of data to 1hz of data to match aircraft ENU data
-    AC_GD = AC_GD[4:7560:5]
+    AC_ENU = pd.read_csv('./enu_int_trunc.csv', header= None).to_numpy()
     # Convert AC position from ENU to ECEF
     AC_ECEF = enu2ecef_pos(AC_ENU, ENU_cfp, ENU_cfp_ECEF)
 
@@ -106,17 +111,22 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     AC_vel = pd.read_csv('./GNSS_PLANE_wed-flight3.csv', usecols=cols_used)[col_reorder].to_numpy()
     # Change from 5hz of data to 1hz of data to match aircraft ENU data
     AC_vel = AC_vel[4:7560:5]
+    # Start at GPS time of week 351127 for new data (timestep 235)
+    AC_vel = AC_vel[235::]
+    # Insert initial velocity for initial position 
+    AC_vel = np.insert(AC_vel,0,[0,0,0],axis=0)
     # Convert DOWN into UP
     AC_vel[:, 2] *= -1
     # Convert AC velocity ENU to ECEF
     AC_vel_ECEF = enu2ecef_vel(AC_vel, ENU_cfp)
 
     # Pull timestamp from data to produce dt
-    GPS_time = pd.read_csv('./L1_L2_Sats.csv', usecols=[0]).to_numpy()
+    GPS_time = pd.read_csv('./truth_time0_trunc.csv').to_numpy()
     # Create dt
-    AC_dt = np.zeros(len(GPS_time)-1)
+    AC_dt = np.zeros(len(GPS_time))
+    AC_dt[0] = 1.0
     for n in range(len(GPS_time)-1):
-        AC_dt[n] = GPS_time[n+1] - GPS_time[n]
+        AC_dt[n+1] = GPS_time[n+1] - GPS_time[n]
 
     ## Create truth matrix
     # Pull out first state x0
@@ -129,7 +139,7 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     for i in range(len(truth_table)):
         truth_table[i, :] = [AC_ECEF[i,0], AC_vel_ECEF[i,0], AC_ECEF[i,1], AC_vel_ECEF[i,1], AC_ECEF[i,2], AC_vel_ECEF[i,2], Cdt, Cdt_dot]
     
-    return GPS_PR_0, GPS_PR, GPS_pos0_ECEF, GPS_pos_matrix, AC_dt, AC_x0, truth_table
+    return GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table
         
 
 def enu2ecef_vel(AC_vel, ENU_cfp):
@@ -706,9 +716,9 @@ def plot_res(bias_sat, bias_sec, thres_mat, cum_res_mat, num_coords, s_dt):
 
 ## SET UP
 # ENU Center fixed point (Geodetic Coords in radians)
-ENU_cfp = np.array([0.68667326519, -1.5011475667, 192.00])
-# ENU Center fixed point (ECEF km) matlab conversion
-ENU_cfp_ECEF = np.array([343744.28, -4927413.92, 4022001.33])
+ENU_cfp = np.array([0.686675684196376, -1.501148870448501, 187.0243855202571])
+# ENU Center fixed point (ECEF m) matlab conversion
+ENU_cfp_ECEF = np.array([343736.907462, -4927400.792919, 4022010.073744])
 # satellite timestep (update rate)
 s_dt = 1
 # speed of light (m/s)
@@ -735,17 +745,17 @@ white_noise = np.random.default_rng()
 # Get sat coordinates, truth data of states and pseudorange measurements
 # chose_sat_ECEF, reserve_sat_ECEF = gen_sat_ecef(num_SVs)
 # Real AC data
-GPS_PR_0, GPS_PR, GPS_pos0_ECEF, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot)
+GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot)
 
-GPS_PR = np.insert(GPS_PR, 0, GPS_PR_0, axis=0)
-GPS_pos_matrix = np.insert(GPS_pos_matrix, 0, GPS_pos0_ECEF, axis=0)
+# GPS_PR = np.insert(GPS_PR, 0, GPS_PR_0, axis=0)
+# GPS_pos_matrix = np.insert(GPS_pos_matrix, 0, GPS_pos0_ECEF, axis=0)
 
 # truth_mat = gen_truth(num_coords, x0, dt)
 # usr_ECEF, sens_meas_mat, bias_sat, bias_sec = gen_sensor_meas(num_coords, chose_sat_ECEF, truth_mat, s_dt, Cdt)
 # number of coordinates/steps from user not including initial
-num_coords = len(truth_table)
+num_coords = len(AC_dt)
 # number of satellites
-num_SVs = len(GPS_PR_0)
+num_SVs = 8
 # Initial Covariance (don't know bias)
 P0 = np.zeros((len(AC_x0),len(AC_x0)))
 d_array = [100,100,100,100,100,100,100,100]
@@ -784,9 +794,9 @@ res_win = []
 
 for i in range(num_coords):
     # Pulling one per time step
-    sens_meas = GPS_PR[i] 
+    sens_meas = GPS_PR[i*8:i*8+8,:].flatten() 
     truth = truth_table[i]
-    sat_ECEF = GPS_pos_matrix[i*7:i*7+7,:]
+    sat_ECEF = GPS_pos_matrix[i*8:i*8+8,:]
     dt = AC_dt[i]
 
     # Check if there is any nan data
