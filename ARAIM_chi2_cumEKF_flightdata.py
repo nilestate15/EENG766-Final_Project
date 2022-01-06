@@ -282,7 +282,7 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Q, R):
 
     # Build H Matrix (Measurement Matrix)
     H = np.zeros((len(sat_ENU), len(curr_x)))
-    for cnt, sat_pos in enumerate(sat_ECEF):
+    for cnt, sat_pos in enumerate(sat_ENU):
         part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
         part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
         part_z = -(sat_pos[2] - curr_x[4]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
@@ -813,7 +813,7 @@ for i in range(num_coords):
         print(f'Satellite {idx_nan_meas} info is unnavailable')
         print('\n')
         sens_meas = np.delete(sens_meas, idx_nan_meas)
-        sat_ECEF = np.delete(sat_ENU, idx_nan_meas, axis=0)
+        sat_ENU = np.delete(sat_ENU, idx_nan_meas, axis=0)
 
         # Build State Error Covariance Matrix
         Qxyz = np.array([[Sp * (dt**3)/3, Sp * (dt**2)/2],  [Sp * (dt**2)/2, Sp * dt]])
