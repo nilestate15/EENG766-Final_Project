@@ -59,7 +59,7 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     GPS_PR = GPS_PR[8::]
 
     # Read in each ENU satellite position data (3,4,9,16,22,26,27,31)
-    GPS_pos_mat = pd.read_csv('./SV_ENU0trunc_resize.csv', header= None, usecols=[3,4,5]).to_numpy()
+    GPS_pos_matrix = pd.read_csv('./SV_ENU0trunc_resize.csv', header= None, usecols=[3,4,5]).to_numpy()
 
     # GPS16 = pd.read_csv('./L1_L2_Sats.csv', usecols=[3,4,5], skiprows=1).to_numpy()
     # GPS22 = pd.read_csv('./L1_L2_Sats.csv', usecols=[8,9,10], skiprows=1).to_numpy()
@@ -73,7 +73,7 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     # GPS_pos0 = GPS_pos0.reshape((7,3))
 
     # Convert Satellite positions from ENU to ECEF
-    GPS_pos_matrix = enu2ecef_pos(GPS_pos_mat, ENU_cfp, ENU_cfp_ECEF)
+    # GPS_pos_matrix = enu2ecef_pos(GPS_pos_mat, ENU_cfp, ENU_cfp_ECEF)
     # Pull out initial GPS positions
     GPS_pos_0 = GPS_pos_matrix[0:8,:]
     # Remove initial GPS positions
@@ -103,7 +103,7 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     # Read in ENU aircraft position data
     AC_ENU = pd.read_csv('./enu_int_trunc.csv', header= None).to_numpy()
     # Convert AC position from ENU to ECEF
-    AC_ECEF = enu2ecef_pos(AC_ENU, ENU_cfp, ENU_cfp_ECEF)
+    # AC_ECEF = enu2ecef_pos(AC_ENU, ENU_cfp, ENU_cfp_ECEF)
 
     # Read in aircraft velocity data (NED) and convert to ENU
     cols_used = ['velocity_north','velocity_east','velocity_down']
@@ -118,7 +118,7 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     # Convert DOWN into UP
     AC_vel[:, 2] *= -1
     # Convert AC velocity ENU to ECEF
-    AC_vel_ECEF = enu2ecef_vel(AC_vel, ENU_cfp)
+    # AC_vel_ECEF = enu2ecef_vel(AC_vel, ENU_cfp)
 
     # Pull timestamp from data to produce dt
     GPS_time = pd.read_csv('./truth_time0_trunc.csv').to_numpy()
@@ -130,14 +130,14 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
 
     ## Create truth matrix
     # Pull out first state x0
-    AC_x0 = np.array([AC_ECEF[0,0], AC_vel_ECEF[0,0], AC_ECEF[0,1], AC_vel_ECEF[0,1], AC_ECEF[0,2], AC_vel_ECEF[0,2], Cdt, Cdt_dot])
+    AC_x0 = np.array([AC_ENU[0,0], AC_vel[0,0], AC_ENU[0,1], AC_vel[0,1], AC_ENU[0,2], AC_vel[0,2], Cdt, Cdt_dot])
     # Remove initial position and velocity from array
-    AC_ECEF = np.delete(AC_ECEF, 0, 0)
-    AC_vel_ECEF = np.delete(AC_vel_ECEF, 0, 0)
+    AC_ENU = np.delete(AC_ENU, 0, 0)
+    AC_vel = np.delete(AC_vel, 0, 0)
     # Make truth matrix
-    truth_table = np.zeros((len(AC_ECEF), 8))
+    truth_table = np.zeros((len(AC_ENU), 8))
     for i in range(len(truth_table)):
-        truth_table[i, :] = [AC_ECEF[i,0], AC_vel_ECEF[i,0], AC_ECEF[i,1], AC_vel_ECEF[i,1], AC_ECEF[i,2], AC_vel_ECEF[i,2], Cdt, Cdt_dot]
+        truth_table[i, :] = [AC_ENU[i,0], AC_vel[i,0], AC_ENU[i,1], AC_vel[i,1], AC_ENU[i,2], AC_vel[i,2], Cdt, Cdt_dot]
     
     return GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table
         
@@ -248,12 +248,12 @@ def gen_sensor_meas(num_coords, chose_sat_ECEF, truth, s_dt, Cdt):
 
     return usr_ECEF, meas, bias_sat, bias_sec
 
-def EKF(sat_ECEF, sens_meas, dt, curr_x, curr_P, Q, R):
+def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Q, R):
     '''
     This function handles the EKF process of the RAIM and returns the H matrix (meas matrix) and residuals
 
     Args:
-        sat_ECEF: an (num sat,3) array of ECEF coordinates of satellites
+        sat_ENU: an (num sat,3) array of ENU coordinates of satellites
         sens_meas: an (num truth/s_dt, num sat) array of psuedorange measurements
         curr_x: an (8,) array of the users current state
         curr_P: an (8,8) array of the users current covariance
@@ -281,7 +281,7 @@ def EKF(sat_ECEF, sens_meas, dt, curr_x, curr_P, Q, R):
     curr_P = F.dot(curr_P).dot(F.T) + Q
 
     # Build H Matrix (Measurement Matrix)
-    H = np.zeros((len(sat_ECEF), len(curr_x)))
+    H = np.zeros((len(sat_ENU), len(curr_x)))
     for cnt, sat_pos in enumerate(sat_ECEF):
         part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
         part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
@@ -294,8 +294,8 @@ def EKF(sat_ECEF, sens_meas, dt, curr_x, curr_P, Q, R):
         H[cnt,6] = part_cdt
 
     # Predicted Pseudorange Measurement (h(x) formula)
-    pred_meas = np.zeros(len(sat_ECEF))
-    for n, sat_pos in enumerate(sat_ECEF):
+    pred_meas = np.zeros(len(sat_ENU))
+    for n, sat_pos in enumerate(sat_ENU):
         pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
 
 
@@ -748,7 +748,7 @@ white_noise = np.random.default_rng()
 GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot)
 
 # GPS_PR = np.insert(GPS_PR, 0, GPS_PR_0, axis=0)
-# GPS_pos_matrix = np.insert(GPS_pos_matrix, 0, GPS_pos0_ECEF, axis=0)
+# GPS_pos_matrix = np.insert(GPS_pos_matrix, 0, GPS_pos_0, axis=0)
 
 # truth_mat = gen_truth(num_coords, x0, dt)
 # usr_ECEF, sens_meas_mat, bias_sat, bias_sec = gen_sensor_meas(num_coords, chose_sat_ECEF, truth_mat, s_dt, Cdt)
@@ -796,7 +796,7 @@ for i in range(num_coords):
     # Pulling one per time step
     sens_meas = GPS_PR[i*8:i*8+8,:].flatten() 
     truth = truth_table[i]
-    sat_ECEF = GPS_pos_matrix[i*8:i*8+8,:]
+    sat_ENU = GPS_pos_matrix[i*8:i*8+8,:]
     dt = AC_dt[i]
 
     # Check if there is any nan data
@@ -813,7 +813,7 @@ for i in range(num_coords):
         print(f'Satellite {idx_nan_meas} info is unnavailable')
         print('\n')
         sens_meas = np.delete(sens_meas, idx_nan_meas)
-        sat_ECEF = np.delete(sat_ECEF, idx_nan_meas, axis=0)
+        sat_ECEF = np.delete(sat_ENU, idx_nan_meas, axis=0)
 
         # Build State Error Covariance Matrix
         Qxyz = np.array([[Sp * (dt**3)/3, Sp * (dt**2)/2],  [Sp * (dt**2)/2, Sp * dt]])
@@ -829,7 +829,7 @@ for i in range(num_coords):
         R = np.eye(len(sens_meas)) * rho_error**2
 
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ECEF, sens_meas, dt, curr_x, curr_P, Q, R)
+        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Q, R)
 
         # RAIM chi2 global statistic check
         res_win.append(wtd_norm_res)
@@ -894,7 +894,7 @@ for i in range(num_coords):
         R = np.eye(len(sens_meas)) * rho_error**2
 
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ECEF, sens_meas, dt, curr_x, curr_P, Q, R)
+        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Q, R)
 
         # RAIM chi2 global statistic check
         res_win.append(wtd_norm_res)
