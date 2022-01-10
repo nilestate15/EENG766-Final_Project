@@ -368,10 +368,12 @@ def RAIM_chi2_global(res, res_win):
 
     ## Test statistic (RAIM Portion)
     # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RAIM for Precision Approach)
-    Pfa = 10e-4
+    Pfa = .025/2
+
+    thres1 = st.norm.isf(q =1- Pfa, df=(1))
 
     # Find inverse chi squared for threshold (m)
-    # thres = st.chi2.isf(q = 1-Pfa, df=(num_SVs*win_size))
+    thres = st.chi2.isf(q =.0025, df=(1))
     thres = 50.00
 
     # spoofed_sat = np.argmax(res)

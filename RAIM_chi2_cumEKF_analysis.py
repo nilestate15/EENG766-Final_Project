@@ -379,7 +379,7 @@ for num in range(27):
     # Pseudorange std dev
     Pr_std = 0.0
     # White noise from random walk position velocity error
-    Sp = 5.0
+    Sp = 10.0
     # White noise from random walk clock bias error (Cdt)
     Sf = 36
     # White noise from random walk clock drift error (Cdt_dot)
