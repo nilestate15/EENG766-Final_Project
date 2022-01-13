@@ -67,7 +67,7 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt):
 
     ## Create truth table
     # Pull out first state x0
-    AC_x0 = np.array([AC_ENU[0,0], AC_vel[0,0], AC_ENU[0,1], AC_vel[0,1], AC_ENU[0,2], AC_vel[0,2], 0.])
+    AC_x0 = np.array([AC_ENU[0,0], AC_vel[0,0], AC_ENU[0,1], AC_vel[0,1], AC_ENU[0,2], AC_vel[0,2], Cdt])
     # Remove initial position and velocity from array
     AC_ENU = np.delete(AC_ENU, 0, 0)
     AC_vel = np.delete(AC_vel, 0, 0)
@@ -108,7 +108,7 @@ def enu2ecef_pos(ENU_data, ENU_cfp, ENU_cfp_ECEF):
     return ECEF_data
 
 
-def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P):
+def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt):
     '''
     This function handles the EKF process of the RAIM and returns the H matrix (meas matrix) and residuals
 
@@ -196,7 +196,7 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P):
     # Predicted Pseudorange Measurement (h(x) formula)
     pred_meas = np.zeros(len(sat_ENU))
     for n, sat_pos in enumerate(sat_ENU):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2) + Cdt
+        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2) + curr_x[9]
 
     
     # Residuals (eq 26/eq 32 but using hx formula rather than Hx)
@@ -563,12 +563,12 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C):
     plt.ylabel('User Velocity Error z-axis (m/s)')
     plt.legend()
 
-    # Plotting Truth vs Predicted User velocity z-axis
+    # Plotting Truth vs Predicted User Clock Error
     plt.figure()
     plt.title('User Clock error')
-    plt.plot(timestep, state_error[:,6]/C, label = "Error")
-    plt.plot(timestep, up_bound[:,6]/C, color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,6]/C, color = 'black', label = "Lower Bound")
+    plt.plot(timestep, state_error[:,6], label = "Error")
+    plt.plot(timestep, up_bound[:,6], color = 'black', label = "Upper Bound")
+    plt.plot(timestep, lw_bound[:,6], color = 'black', label = "Lower Bound")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Clock Error')
     plt.legend()
@@ -757,7 +757,7 @@ for i in range(num_coords):
         print('\n')
 
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
+        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
         SV_res_mat[i] = np.insert(res, idx_nan_meas[0], 0)
 
     elif nan_meas.any() == True and nan_meas.all() == False:
@@ -768,7 +768,7 @@ for i in range(num_coords):
         sat_ENU = np.delete(sat_ENU, idx_nan_meas, axis=0)
 
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
+        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
 
         # RAIM chi2 global statistic check
         res_win.append(wtd_norm_res)
@@ -827,7 +827,7 @@ for i in range(num_coords):
     
     else:
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
+        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
 
         # RAIM chi2 global statistic check
         res_win.append(wtd_norm_res)
