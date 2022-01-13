@@ -52,6 +52,7 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     AC_vel = AC_vel[235::]
     # Insert initial velocity for initial position 
     AC_vel = np.insert(AC_vel,0,[0,0,0],axis=0)
+    
     # Convert DOWN into UP
     AC_vel[:, 2] *= -1
 
@@ -622,11 +623,11 @@ Cdt_dot = 0.0
 # Pseudorange std dev
 Pr_std = 0.0
 # White noise from random walk position velocity error
-Sp = 10.0
+Sp = 50.0
 # White noise from random walk clock bias error (Cdt)
-Sf = 36.0
+Sf = 1000.0
 # White noise from random walk clock drift error (Cdt_dot)
-Sg = 0.01
+Sg = 1000.0
 # Pseudorange measurement error equal variance
 # Needs to be std dev
 rho_error = 2.0
@@ -651,13 +652,13 @@ curr_x = AC_x0
 curr_P = P0 
 
 # Build User Estimated States Matrix
-est_state_mat = np.zeros((num_coords, 8))
+est_state_mat = np.zeros((num_coords, len(AC_x0)))
 
 # Build Estimated Covariance Matirx
-est_cov_mat = np.zeros((num_coords, 8, 8))
+est_cov_mat = np.zeros((num_coords, len(AC_x0), len(AC_x0)))
 
 # Standard covariance for plotting bounds
-cov_bounds = np.zeros((num_coords, 8))
+cov_bounds = np.zeros((num_coords, len(AC_x0)))
 
 # To store the sensor measurement and changes for plotting
 sens_meas_mat_plot = np.zeros((num_coords, num_SVs))
@@ -951,7 +952,7 @@ plot_coords(truth_table, est_state_mat, AC_dt)
 # Plot Error with covariance bound
 plot_error(truth_table, est_state_mat, cov_bounds, AC_dt)
 # Plot Cumulative Residual over time
-plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt)
+# plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt)
 print('done')
 # Convert Residual data to CSV for Excel Table
 # np.savetxt("residuals.csv", res_mat, delimiter=",")
