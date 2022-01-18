@@ -284,7 +284,7 @@ def EKF(chose_sat_ECEF, sens_meas, dt, curr_x, curr_P, Q, R):
     # Predicted Pseudorange Measurement (h(x) formula)
     pred_meas = np.zeros(len(chose_sat_ECEF))
     for n, sat_pos in enumerate(chose_sat_ECEF):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
+        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + curr_x[6]
 
 
     # #Test info
@@ -370,10 +370,10 @@ def RAIM_chi2_global(res, res_win):
     # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RAIM for Precision Approach)
     Pfa = .025/2
 
-    thres1 = st.norm.isf(q =1- Pfa, df=(1))
+    # thres1 = st.norm.isf(q =1- Pfa, df=(1))
 
     # Find inverse chi squared for threshold (m)
-    thres = st.chi2.isf(q =.0025, df=(1))
+    # thres = st.chi2.isf(q =.0025, df=(1))
     thres = 50.00
 
     # spoofed_sat = np.argmax(res)
@@ -427,7 +427,7 @@ def local_seq_test(curr_x, sens_meas, rho_error, i, reserve_sat_ECEF, chose_sat_
     # Refind the Predicted Pseudorange Measurement (h(x) formula) w/o the faulty matrix 
     pred_meas = np.zeros(len(chose_sat_ECEF))
     for n, sat_pos in enumerate(chose_sat_ECEF):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
+        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + curr_x[6]
 
     # Refind Residuals (eq 26/eq 32 but using hx formula rather than Hx) w/o the faulty matrix 
     res = sens_meas - pred_meas

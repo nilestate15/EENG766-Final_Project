@@ -1,3 +1,4 @@
+from multiprocessing.dummy import current_process
 import numpy as np
 from numpy.core.arrayprint import set_string_function
 from numpy.lib.shape_base import _column_stack_dispatcher
@@ -67,14 +68,14 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt):
 
     ## Create truth table
     # Pull out first state x0
-    AC_x0 = np.array([AC_ENU[0,0], AC_vel[0,0], AC_ENU[0,1], AC_vel[0,1], AC_ENU[0,2], AC_vel[0,2], Cdt])
+    AC_x0 = np.array([AC_ENU[0,0], AC_ENU[0,1], AC_ENU[0,2], AC_vel[0,0], AC_vel[0,1], AC_vel[0,2], Cdt])
     # Remove initial position and velocity from array
     AC_ENU = np.delete(AC_ENU, 0, 0)
     AC_vel = np.delete(AC_vel, 0, 0)
     # Make truth matrix
     truth_table = np.zeros((len(AC_ENU), 7))
     for i in range(len(truth_table)):
-        truth_table[i, :] = [AC_ENU[i,0], AC_vel[i,0], AC_ENU[i,1], AC_vel[i,1], AC_ENU[i,2], AC_vel[i,2], Cdt]
+        truth_table[i, :] = [AC_ENU[i,0], AC_ENU[i,1], AC_ENU[i,2], AC_vel[i,0], AC_vel[i,1], AC_vel[i,2], Cdt]
     
     return GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table
         
@@ -108,7 +109,7 @@ def enu2ecef_pos(ENU_data, ENU_cfp, ENU_cfp_ECEF):
     return ECEF_data
 
 
-def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt):
+def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P):
     '''
     This function handles the EKF process of the RAIM and returns the H matrix (meas matrix) and residuals
 
@@ -133,18 +134,16 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt):
     accelbias_tau = 100
     clockbias_sigma = 8000
     clockbias_tau = 3600
-    # clockbias_sigma = 1
-    # clockbias_tau = 3600
 
     # Pseudorange measurement error equal variance
     # Needs to be std dev
-    rho_error = 2.0
+    rho_error = 1.0
 
     # Build State Error Covariance Matrix
     Q = np.zeros((len(curr_x),len(curr_x)))
     Q_acc = 2.0*(accelbias_sigma**2)/accelbias_tau
     Q__cb = 2.0*(clockbias_sigma**2)/clockbias_tau
-    Q_diag = [0, 0, Q_acc, 0, 0, Q_acc, 0, 0, Q_acc, Q__cb]
+    Q_diag = [0, 0, 0, 0, 0, 0, Q_acc, Q_acc, Q_acc, Q__cb]
     np.fill_diagonal(Q, Q_diag)
 
     # Build Measurement Error Covariance Matrix
@@ -161,17 +160,15 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt):
 
     F = np.zeros((len(curr_x),len(curr_x)))
     # Block diagonal matrix for position, velocity, and acceleration
-    Fcv_pva = np.array([[0.,1.,0.], 
-                    [0.,0.,1.],
-                    [0.,0.,(-1/accelbias_tau)]])
-
+    Fcv_pva = np.eye(6)
+    Fcv_a = np.eye(3)*(-1/accelbias_tau)
 
     # Influence of clock bias on state
     F_cb = -1./clockbias_tau
 
-    for m in range(int(len(F)/3)):
-        F[3*m:3*m+3,3*m:3*m+3] = Fcv_pva
-    F[9:,9:] = F_cb
+    F[0:6,3:9] = Fcv_pva
+    F[6:9, 6:9] = Fcv_a
+    F[9,9] = F_cb
 
     # Find Discretized/Linearized Matrices of F, B, and Q using Van Loan Method authored by David Woodburn in gnc.py file
     Phi, Bd, Qd = vanloan(F,B,Q,T)
@@ -183,20 +180,20 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt):
     # Build H Matrix (Measurement Matrix)
     H = np.zeros((len(sat_ENU), len(curr_x)))
     for cnt, sat_pos in enumerate(sat_ENU):
-        part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
-        part_y = -(sat_pos[1] - curr_x[3]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
-        part_z = -(sat_pos[2] - curr_x[6]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
+        part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[1])**2 + (sat_pos[2] - curr_x[2])**2)
+        part_y = -(sat_pos[1] - curr_x[1]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[1])**2 + (sat_pos[2] - curr_x[2])**2)
+        part_z = -(sat_pos[2] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[1])**2 + (sat_pos[2] - curr_x[2])**2)
         part_cdt = 1.
 
         H[cnt,0] = part_x
-        H[cnt,3] = part_y
-        H[cnt,6] = part_z
+        H[cnt,1] = part_y
+        H[cnt,2] = part_z
         H[cnt,9] = part_cdt
 
     # Predicted Pseudorange Measurement (h(x) formula)
     pred_meas = np.zeros(len(sat_ENU))
     for n, sat_pos in enumerate(sat_ENU):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2) + curr_x[9]
+        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[1])**2 + (sat_pos[2] - curr_x[2])**2) + curr_x[9]
 
     
     # Residuals (eq 26/eq 32 but using hx formula rather than Hx)
@@ -416,7 +413,6 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     for i in range(len(timestep)):
         t += AC_dt[i]
         timestep[i] = t
-
     # Truth table should match timestep length
     truth_table = truth_table[:num_coords,:]
 
@@ -432,8 +428,8 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     # Plotting Truth vs Predicted User Coords y-axis
     plt.figure()
     plt.title('User coordinates for y-axis (ENU)')
-    plt.plot(timestep, truth_table[:,2], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,3], label = "Pred")
+    plt.plot(timestep, truth_table[:,1], label = "Truth")
+    plt.plot(timestep, est_state_mat[:,1], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords y-axis (m)')
     plt.legend()
@@ -441,8 +437,8 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     # Plotting Truth vs Predicted User Coords z-axis
     plt.figure()
     plt.title('User coordinates for z-axis (ENU)')
-    plt.plot(timestep, truth_table[:,4], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,6], label = "Pred")
+    plt.plot(timestep, truth_table[:,2], label = "Truth")
+    plt.plot(timestep, est_state_mat[:,2], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords z-axis (m)')
     plt.legend()
@@ -450,8 +446,8 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     # Plotting Truth vs Predicted User velocity x-axis
     plt.figure()
     plt.title('User Velocity for x-axis (ENU)')
-    plt.plot(timestep, truth_table[:,1], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,1], label = "Pred")
+    plt.plot(timestep, truth_table[:,3], label = "Truth")
+    plt.plot(timestep, est_state_mat[:,3], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity x-axis (m/s)')
     plt.legend()
@@ -459,7 +455,7 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     # Plotting Truth vs Predicted User velocity y-axis
     plt.figure()
     plt.title('User Velocity for y-axis (ENU)')
-    plt.plot(timestep, truth_table[:,3], label = "Truth")
+    plt.plot(timestep, truth_table[:,4], label = "Truth")
     plt.plot(timestep, est_state_mat[:,4], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity y-axis (m/s)')
@@ -469,7 +465,7 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     plt.figure()
     plt.title('User Velocity for z-axis (ENU)')
     plt.plot(timestep, truth_table[:,5], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,7], label = "Pred")
+    plt.plot(timestep, est_state_mat[:,5], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity z-axis (m/s)')
     plt.legend()
@@ -477,7 +473,7 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     plt.show()
     return
 
-def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C):
+def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Make timestep for plot
     timestep = np.zeros(num_coords)
     t = 0
@@ -489,15 +485,13 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C):
     truth_table = truth_table[:num_coords,:]
 
     # Make covariance upper and lower bound
-    # Sigma bounds for plot
-    cov_sigma = 2
-    up_bound = cov_sigma * cov_bounds
-    lw_bound = cov_sigma * cov_bounds*-1
+    up_bound = 2*cov_bounds
+    lw_bound = 2*(cov_bounds*-1)
 
-    # Make error between truth and predicted state
+     # Make error between truth and predicted state
     # Remove acceleration 
-    est_state_mat = np.delete(est_state_mat, 2, 1)
-    est_state_mat = np.delete(est_state_mat, 4, 1)
+    est_state_mat = np.delete(est_state_mat, 6, 1)
+    est_state_mat = np.delete(est_state_mat, 6, 1)
     est_state_mat = np.delete(est_state_mat, 6, 1)
 
     # Find error between states
@@ -516,9 +510,9 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C):
     # Plotting Truth vs Predicted User Coords y-axis
     plt.figure()
     plt.title('User coordinates error for y-axis (ENU)')
-    plt.plot(timestep, state_error[:,2], label = "Error")
-    plt.plot(timestep, up_bound[:,2], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,2], color = 'black', label = "Lower Bound")
+    plt.plot(timestep, state_error[:,1], label = "Error")
+    plt.plot(timestep, up_bound[:,1], color = 'black', label = "Upper Bound")
+    plt.plot(timestep, lw_bound[:,1], color = 'black', label = "Lower Bound")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords Error y-axis (m)')
     plt.legend()
@@ -526,9 +520,9 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C):
     # Plotting Truth vs Predicted User Coords z-axis
     plt.figure()
     plt.title('User coordinates error for z-axis (ENU)')
-    plt.plot(timestep, state_error[:,4], label = "Error")
-    plt.plot(timestep, up_bound[:,4], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,4], color = 'black', label = "Lower Bound")
+    plt.plot(timestep, state_error[:,2], label = "Error")
+    plt.plot(timestep, up_bound[:,2], color = 'black', label = "Upper Bound")
+    plt.plot(timestep, lw_bound[:,2], color = 'black', label = "Lower Bound")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords Error z-axis (m)')
     plt.legend()
@@ -536,9 +530,9 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C):
     # Plotting Truth vs Predicted User velocity x-axis
     plt.figure()
     plt.title('User Velocity error for x-axis (ENU)')
-    plt.plot(timestep, state_error[:,1], label = "Error")
-    plt.plot(timestep, up_bound[:,1], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,1], color = 'black', label = "Lower Bound")
+    plt.plot(timestep, state_error[:,3], label = "Error")
+    plt.plot(timestep, up_bound[:,3], color = 'black', label = "Upper Bound")
+    plt.plot(timestep, lw_bound[:,3], color = 'black', label = "Lower Bound")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity Error x-axis (m/s)')
     plt.legend()
@@ -546,9 +540,9 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C):
     # Plotting Truth vs Predicted User velocity y-axis
     plt.figure()
     plt.title('User Velocity error for y-axis (ENU)')
-    plt.plot(timestep, state_error[:,3], label = "Error")
-    plt.plot(timestep, up_bound[:,3], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,3], color = 'black', label = "Lower Bound")
+    plt.plot(timestep, state_error[:,4], label = "Error")
+    plt.plot(timestep, up_bound[:,4], color = 'black', label = "Upper Bound")
+    plt.plot(timestep, lw_bound[:,4], color = 'black', label = "Lower Bound")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity Error y-axis (m/s)')
     plt.legend()
@@ -561,16 +555,6 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C):
     plt.plot(timestep, lw_bound[:,5], color = 'black', label = "Lower Bound")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity Error z-axis (m/s)')
-    plt.legend()
-
-    # Plotting Truth vs Predicted User Clock Error
-    plt.figure()
-    plt.title('User Clock error')
-    plt.plot(timestep, state_error[:,6], label = "Error")
-    plt.plot(timestep, up_bound[:,6], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,6], color = 'black', label = "Lower Bound")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Clock Error')
     plt.legend()
 
     
@@ -685,23 +669,25 @@ s_dt = 1
 # speed of light (m/s)
 C = 299792458.0
 # Psuedorange bias
-Cdt = -0.000410830353*C
+Cdt = -0.00041083*C
 # Pseudorange std dev
 Pr_std = 0.0
+
+# Random samples normal distribution for white noise
+white_noise = np.random.default_rng()
 
 # Real AC data
 GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt)
 
 # Insert initial PR and GPS position
-# GPS_pos_matrix = np.insert(GPS_pos_matrix, 0, GPS_pos_0, axis=0)
-# GPS_PR = np.insert(GPS_PR, 0, GPS_PR_0, axis=0)
+GPS_pos_matrix = np.insert(GPS_pos_matrix, 0, GPS_pos_0, axis=0)
+GPS_PR = np.insert(GPS_PR, 0, GPS_PR_0, axis=0)
 
 # Add in accceleration for initial state
 acc0 = np.array([0.,0.,0.])
-AC_x0 = np.insert(AC_x0, (2,4,6), (acc0[0], acc0[1], acc0[2]))
+AC_x0 = np.insert(AC_x0, (6,6,6), (acc0[0], acc0[1], acc0[2]))
 # number of coordinates/steps from user not including initial
 num_coords = int(len(AC_dt))
-# num_coords = 10
 # number of satellites
 num_SVs = 8
 # Initial Covariance (don't know bias)
@@ -757,7 +743,7 @@ for i in range(num_coords):
         print('\n')
 
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
         SV_res_mat[i] = np.insert(res, idx_nan_meas[0], 0)
 
     elif nan_meas.any() == True and nan_meas.all() == False:
@@ -768,7 +754,7 @@ for i in range(num_coords):
         sat_ENU = np.delete(sat_ENU, idx_nan_meas, axis=0)
 
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
 
         # RAIM chi2 global statistic check
         res_win.append(wtd_norm_res)
@@ -827,7 +813,7 @@ for i in range(num_coords):
     
     else:
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
 
         # RAIM chi2 global statistic check
         res_win.append(wtd_norm_res)
@@ -965,11 +951,11 @@ for i in range(num_coords):
 # Plot Psuedoranges of measurements and predicted measurements 
 # plot_pseudo(valid_sat_meas_mat, bias_sat_meas_mat, valid_pred_sat_meas_mat, bias_sat_meas_pred_mat, num_coords, s_dt)
 # Plot Truth coordinates to Predicted Coordinates
-# plot_coords(num_coords, truth_table, est_state_mat, AC_dt)
+plot_coords(num_coords, truth_table, est_state_mat, AC_dt)
 # Plot Error with covariance bound
-plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, C)
+plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt)
 # Plot Cumulative Residual over time
-plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt)
+# plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt)
 print('done')
 # Convert Residual data to CSV for Excel Table
 # np.savetxt("residuals.csv", res_mat, delimiter=",")

@@ -9,10 +9,9 @@ from scipy.linalg.basic import _validate_args_for_toeplitz_ops
 import scipy.stats as st
 import matplotlib.pyplot as plt
 import pandas as pd
-from gnc import vanloan
 
 
-def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt):
+def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     '''
     This function loads in pseudoranges and satellite ENU data for the 7 different satellites.
     It also loads in the truth data of the aircraft as well.
@@ -67,14 +66,14 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt):
 
     ## Create truth table
     # Pull out first state x0
-    AC_x0 = np.array([AC_ENU[0,0], AC_ENU[0,1], AC_ENU[0,2], AC_vel[0,0], AC_vel[0,1], AC_vel[0,2], Cdt])
+    AC_x0 = np.array([AC_ENU[0,0], AC_vel[0,0], AC_ENU[0,1], AC_vel[0,1], AC_ENU[0,2], AC_vel[0,2], Cdt, Cdt_dot])
     # Remove initial position and velocity from array
     AC_ENU = np.delete(AC_ENU, 0, 0)
     AC_vel = np.delete(AC_vel, 0, 0)
     # Make truth matrix
-    truth_table = np.zeros((len(AC_ENU), 7))
+    truth_table = np.zeros((len(AC_ENU), 8))
     for i in range(len(truth_table)):
-        truth_table[i, :] = [AC_ENU[i,0], AC_ENU[i,1], AC_ENU[i,2], AC_vel[i,0], AC_vel[i,1], AC_vel[i,2], Cdt]
+        truth_table[i, :] = [AC_ENU[i,0], AC_vel[i,0], AC_ENU[i,1], AC_vel[i,1], AC_ENU[i,2], AC_vel[i,2], Cdt, Cdt_dot]
     
     return GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table
         
@@ -127,61 +126,53 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P):
         H: an (num sat, 8) array of the (H matrix) measurement matrix
         res: an (num sat,) array of the residuals of the pseudorange measurements
     '''
-
-    # Constants from ARMAS EKF setup
-    accelbias_sigma = 100
-    accelbias_tau = 100
-    clockbias_sigma = 8000
-    clockbias_tau = 3600
-
+    # White noise from random walk position velocity error
+    Sp = 5.0
+    # Gets mean to 3
+    # Sp = 3.0
+    # White noise from random walk clock bias error (Cdt)
+    Sf = 36.0
+    # White noise from random walk clock drift error (Cdt_dot)
+    Sg = 0.01
     # Pseudorange measurement error equal variance
     # Needs to be std dev
-    rho_error = 1.0
+    rho_error = 2.0
 
-    # Build State Error Covariance Matrix
+    # Build State Error Covariance Matrix (Exploring the Extended Kalman Filter for GPS Positioning Using Simulated User and Satellite Track Data by Mark Wickert)
+    # Submatrix of position-velocity state-pair
+    Qxyz = np.array([[Sp * (dt**3)/3, Sp * (dt**2)/2],  [Sp * (dt**2)/2, Sp * dt]])
+    # Submatrix of clock and clock drift
+    Qb = np.array([[Sf*dt + (Sg * dt**3)/3, (Sg * dt**2)/2],  [(Sg * dt**2)/2, (Sg * dt)]])
+
     Q = np.zeros((len(curr_x),len(curr_x)))
-    Q_acc = 2.0*(accelbias_sigma**2)/accelbias_tau
-    Q__cb = 2.0*(clockbias_sigma**2)/clockbias_tau
-    Q_diag = [0, 0, 0, 0, 0, 0, Q_acc, Q_acc, Q_acc, Q__cb]
-    np.fill_diagonal(Q, Q_diag)
+    Q[:2,:2] = Qxyz
+    Q[2:4,2:4] = Qxyz
+    Q[4:6,4:6] = Qxyz
+    Q[6:,6:] = Qb
 
     # Build Measurement Error Covariance Matrix
     R = np.eye(len(sens_meas)) * rho_error**2
 
-    # Build Input Matrix
-    B = np.zeros((len(curr_x),len(curr_x)))
-
-    # Set Sampling Period (T) to dt for Van Loan Method
-    T = dt
-
     ## Propagation
     # Build F Matrix (State Matrix) (No coupling between x,y,z,cdt therefore state matrix is block diagonal)
-
     F = np.zeros((len(curr_x),len(curr_x)))
-    # Block diagonal matrix for position, velocity, and acceleration
-    Fcv_pva = np.eye(6)
-    Fcv_a = np.eye(3)*(-1/accelbias_tau)
+    Fcv = np.array([[1.,dt], 
+                    [0.,1.]])
+                    
 
-    # Influence of clock bias on state
-    F_cb = -1./clockbias_tau
-
-    F[0:6,3:9] = Fcv_pva
-    F[6:9, 6:9] = Fcv_a
-    F[9,9] = F_cb
-
-    # Find Discretized/Linearized Matrices of F, B, and Q using Van Loan Method authored by David Woodburn in gnc.py file
-    Phi, Bd, Qd = vanloan(F,B,Q,T)
+    for m in range(int(len(F)/2)):
+        F[2*m:2*m+2,2*m:2*m+2] = Fcv
 
     # Prediction of state and covariance
-    curr_x = Phi.dot(curr_x)
-    curr_P = Phi.dot(curr_P).dot(Phi.T) + Qd
+    curr_x = F.dot(curr_x)
+    curr_P = F.dot(curr_P).dot(F.T) + Q
 
     # Build H Matrix (Measurement Matrix)
     H = np.zeros((len(sat_ENU), len(curr_x)))
     for cnt, sat_pos in enumerate(sat_ENU):
-        part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[1])**2 + (sat_pos[2] - curr_x[2])**2)
-        part_y = -(sat_pos[1] - curr_x[1]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[1])**2 + (sat_pos[2] - curr_x[2])**2)
-        part_z = -(sat_pos[2] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[1])**2 + (sat_pos[2] - curr_x[2])**2)
+        part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+        part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+        part_z = -(sat_pos[2] - curr_x[4]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
         part_cdt = 1.
 
         H[cnt,0] = part_x
@@ -192,7 +183,7 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P):
     # Predicted Pseudorange Measurement (h(x) formula)
     pred_meas = np.zeros(len(sat_ENU))
     for n, sat_pos in enumerate(sat_ENU):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[1])**2 + (sat_pos[2] - curr_x[2])**2) + Cdt
+        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + curr_x[6]
 
     
     # Residuals (eq 26/eq 32 but using hx formula rather than Hx)
@@ -217,8 +208,6 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P):
     wtd_norm_res = np.inner(norm_res.T,norm_res)
 
     return curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas
-
-
 
 def RAIM_chi2_global(res, res_win):
     '''
@@ -303,9 +292,9 @@ def local_seq_test(curr_x, sens_meas, rho_error, i, sat_ENU, spoofed_sat):
     # Refind H matrix (Measurement Matrix) w/o the faulty matrix 
     H = np.zeros((len(chose_sat_ECEF), len(curr_x)))
     for cnt, sat_pos in enumerate(chose_sat_ECEF):
-        part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
-        part_y = -(sat_pos[1] - curr_x[3]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
-        part_z = -(sat_pos[2] - curr_x[6]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
+        part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+        part_y = -(sat_pos[1] - curr_x[2]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
+        part_z = -(sat_pos[2] - curr_x[4]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2)
         part_cdt = 1.
 
         H[cnt,0] = part_x
@@ -316,7 +305,7 @@ def local_seq_test(curr_x, sens_meas, rho_error, i, sat_ENU, spoofed_sat):
     # Refind the Predicted Pseudorange Measurement (h(x) formula) w/o the faulty matrix 
     pred_meas = np.zeros(len(chose_sat_ECEF))
     for n, sat_pos in enumerate(chose_sat_ECEF):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2) + Cdt
+        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[2])**2 + (sat_pos[2] - curr_x[4])**2) + Cdt
 
     # Refind Residuals (eq 26/eq 32 but using hx formula rather than Hx) w/o the faulty matrix 
     res = sens_meas - pred_meas
@@ -405,15 +394,13 @@ def plot_pseudo(valid_sat_meas_mat, bias_sat_meas_mat, valid_pred_sat_meas_mat, 
 
     return
 
-def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
+def plot_coords(truth_table, est_state_mat, AC_dt):
     # Make timestep for plot
-    timestep = np.zeros(num_coords)
+    timestep = np.zeros(len(AC_dt))
     t = 0
     for i in range(len(timestep)):
         t += AC_dt[i]
         timestep[i] = t
-    # Truth table should match timestep length
-    truth_table = truth_table[:num_coords,:]
 
     # Plotting Truth vs Predicted User Coords x-axis
     plt.figure()
@@ -427,8 +414,8 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     # Plotting Truth vs Predicted User Coords y-axis
     plt.figure()
     plt.title('User coordinates for y-axis (ENU)')
-    plt.plot(timestep, truth_table[:,1], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,1], label = "Pred")
+    plt.plot(timestep, truth_table[:,2], label = "Truth")
+    plt.plot(timestep, est_state_mat[:,2], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords y-axis (m)')
     plt.legend()
@@ -436,8 +423,8 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     # Plotting Truth vs Predicted User Coords z-axis
     plt.figure()
     plt.title('User coordinates for z-axis (ENU)')
-    plt.plot(timestep, truth_table[:,2], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,2], label = "Pred")
+    plt.plot(timestep, truth_table[:,4], label = "Truth")
+    plt.plot(timestep, est_state_mat[:,4], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords z-axis (m)')
     plt.legend()
@@ -445,8 +432,8 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     # Plotting Truth vs Predicted User velocity x-axis
     plt.figure()
     plt.title('User Velocity for x-axis (ENU)')
-    plt.plot(timestep, truth_table[:,3], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,3], label = "Pred")
+    plt.plot(timestep, truth_table[:,1], label = "Truth")
+    plt.plot(timestep, est_state_mat[:,1], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity x-axis (m/s)')
     plt.legend()
@@ -454,8 +441,8 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     # Plotting Truth vs Predicted User velocity y-axis
     plt.figure()
     plt.title('User Velocity for y-axis (ENU)')
-    plt.plot(timestep, truth_table[:,4], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,4], label = "Pred")
+    plt.plot(timestep, truth_table[:,3], label = "Truth")
+    plt.plot(timestep, est_state_mat[:,3], label = "Pred")
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity y-axis (m/s)')
     plt.legend()
@@ -472,26 +459,21 @@ def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
     plt.show()
     return
 
-def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
+def plot_error(truth_table, est_state_mat, cov_bounds, AC_dt):
     # Make timestep for plot
-    timestep = np.zeros(num_coords)
+    timestep = np.zeros(len(AC_dt))
     t = 0
     for i in range(len(timestep)):
         t += AC_dt[i]
         timestep[i] = t
 
-    # Truth table should match timestep length
-    truth_table = truth_table[:num_coords,:]
-
     # Make covariance upper and lower bound
-    up_bound = cov_bounds
-    lw_bound = cov_bounds*-1
+    # Sigma bounds for plot
+    cov_sigma = 2
+    up_bound = cov_sigma * cov_bounds
+    lw_bound = cov_sigma * cov_bounds*-1
 
     # Make error between truth and predicted state
-    # Remove acceleration 
-    est_state_mat_plot = est_state_mat[:,:6]
-
-    # Find error between states
     state_error = truth_table - est_state_mat
 
     # Plotting Truth vs Predicted User Coords x-axis
@@ -556,7 +538,43 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
 
     
     plt.show()
-    return    
+    return state_error
+
+def plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt):
+    # Make timestep for plot
+    timestep = np.zeros(num_coords)
+    t = 0
+    for i in range(len(timestep)):
+        t += AC_dt[i]
+        timestep[i] = t 
+
+    ## Normalized Estimation Error Squared (NEES)
+    # Remove Clock bias and drift from state error
+    # NEES_st_err = np.delete(state_error, [6,7], 1)
+    # Remove velocity Clock bias and drift from state error
+    NEES_st_err = np.delete(state_error, [1,3,5,6,7], 1)
+
+    # NEES Matrix
+    NEES_mat = np.zeros(num_coords)
+    for i in range(num_coords):
+        NEES_mat[i] = NEES_st_err[i].T.dot(la.inv(NEES_cov_mat[i])).dot(NEES_st_err[i])
+
+    # Line of stability for filter
+    stab_line = np.ones(num_coords)*3
+
+    mean_NEES = np.mean(NEES_mat)
+
+    # Plotting Truth vs Predicted User Coords x-axis
+    plt.figure()
+    plt.title('NEES of Filter')
+    plt.plot(timestep, NEES_mat, label = "NEES")
+    plt.plot(timestep, stab_line, label = "Stability")
+    plt.xlabel('Time (secs)')
+    plt.ylabel('NEES')
+    plt.legend()
+   
+    plt.show()
+    return          
 
 def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     # Make timestep for plot
@@ -666,31 +684,22 @@ s_dt = 1
 # speed of light (m/s)
 C = 299792458.0
 # Psuedorange bias
-Cdt = -0.00041083*C
+Cdt = -0.000410830353*C
+# Psuedorange bias velocity (rate of drift between receiver and SV clocks)
+Cdt_dot = 0.0
 # Pseudorange std dev
 Pr_std = 0.0
 
-# Random samples normal distribution for white noise
-white_noise = np.random.default_rng()
-
 # Real AC data
-GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt)
+GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot)
 
-# Insert initial PR and GPS position
-GPS_pos_matrix = np.insert(GPS_pos_matrix, 0, GPS_pos_0, axis=0)
-GPS_PR = np.insert(GPS_PR, 0, GPS_PR_0, axis=0)
-
-# Add in accceleration for initial state
-acc0 = np.array([0.,0.,0.])
-AC_x0 = np.insert(AC_x0, (6,6,6), (acc0[0], acc0[1], acc0[2]))
 # number of coordinates/steps from user not including initial
-# num_coords = int(len(AC_dt))
-num_coords = 10
+num_coords = len(AC_dt)
 # number of satellites
 num_SVs = 8
 # Initial Covariance (don't know bias)
 P0 = np.zeros((len(AC_x0),len(AC_x0)))
-d_array = [100,50,25,100,50,25,100,50,25,100,100]
+d_array = [100,100,100,100,100,100,100,100]
 np.fill_diagonal(P0, d_array)
 
 
@@ -723,6 +732,10 @@ pred_meas_mat = []
 
 ## Make window size for residuals
 res_win = []
+
+# Normalized Estimation Error Squared (NEES) Matrix
+# NEES_cov_mat = np.zeros((num_coords, 6, 6))
+NEES_cov_mat = np.zeros((num_coords, 3, 3))
 
 for i in range(num_coords):
     # Pulling one per time step
@@ -808,6 +821,13 @@ for i in range(num_coords):
         est_cov_mat[i] = curr_P
         cov_bounds[i] = std_cov
         # pred_mat[i] = pred_meas
+
+       # Saving Position and Velocity Covariance
+        NEES_cov = curr_P
+        # Remove velocity and clock bias from covariance 
+        NEES_cov = np.delete(NEES_cov, [1,3,5,6,7], 1)
+        NEES_cov = np.delete(NEES_cov, [1,3,5,6,7], 0)
+        NEES_cov_mat[i] = NEES_cov
     
     else:
         # EKF
@@ -862,6 +882,14 @@ for i in range(num_coords):
         est_cov_mat[i] = curr_P
         cov_bounds[i] = std_cov
         # pred_mat[i] = pred_meas
+
+        # Saving Position and Velocity Covariance
+        NEES_cov = curr_P
+        # Remove velocity and clock bias from covariance 
+        NEES_cov = np.delete(NEES_cov, [1,3,5,6,7], 1)
+        NEES_cov = np.delete(NEES_cov, [1,3,5,6,7], 0)
+        NEES_cov_mat[i] = NEES_cov
+        print('done')
 
 # Plotting and Tables
 # Reorganize matrices to plot satellites accurately
@@ -945,15 +973,16 @@ for i in range(num_coords):
 # bias_sat_meas_mat = np.append(bias_sat_meas_mat, sens_meas_mat_plot[bias_catch_ts:, -1])
 # bias_sat_meas_pred_mat = np.append(bias_sat_meas_pred_mat, pred_mat[bias_catch_ts:, -1])
 
-
 # Plot Psuedoranges of measurements and predicted measurements 
 # plot_pseudo(valid_sat_meas_mat, bias_sat_meas_mat, valid_pred_sat_meas_mat, bias_sat_meas_pred_mat, num_coords, s_dt)
 # Plot Truth coordinates to Predicted Coordinates
-plot_coords(num_coords, truth_table, est_state_mat, AC_dt)
+# plot_coords(truth_table, est_state_mat, AC_dt)
 # Plot Error with covariance bound
-plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt)
+state_error = plot_error(truth_table, est_state_mat, cov_bounds, AC_dt)
+# Plot Normalized Estimation Error Squared (NEES)
+plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
 # Plot Cumulative Residual over time
-# plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt)
+plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt)
 print('done')
 # Convert Residual data to CSV for Excel Table
 # np.savetxt("residuals.csv", res_mat, delimiter=",")
