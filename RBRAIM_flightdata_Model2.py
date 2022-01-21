@@ -1,8 +1,6 @@
-from cgi import test
-from multiprocessing.dummy import current_process
 import numpy as np
 import scipy.linalg as la
-from math import nan, pi, sin, cos, sqrt
+from math import sin, cos
 import matplotlib.pyplot as plt
 import pandas as pd
 import scipy.stats as st
@@ -11,15 +9,26 @@ from gnc import vanloan
 
 def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     '''
-    This function loads in pseudoranges and satellite ENU data for the 7 different satellites.
-    It also loads in the truth data of the aircraft as well.
+    This function loads data from Camp Atterbury experiment.  Data being pulled in is satellite position, aircraft position and velocity,
+    pseudorange between each satellite, and the timestamp between each data point. The position and velocity data is in ENU.
+    
 
     Args:
-        
+    ENU_cfp: ENU Center fixed point in Geodetic Coords radians. (Used in optional function converting ENU points to ECEF )
+    ENU_cfp_ECEF: ENU Center fixed point in ECEF meters. (Used in optional function converting ENU velocity to ECEF) 
+    Cdt: The clock bias between the satellite clock and aircraft receiver clock (Used in creating truth state)
+    Cdt_dot: The clock drift/rate of change in the clock bias (Used in creating truth state)
 
-    Returns:
-        
+    Returns: , GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table
+    GPS_PR: A (# of Satellites * # of timesteps, 1) array of the psuedoranges from each satellite for each timestep (array excludes initial pseudoranges).
+    GPS_PR_0: A (# of Satellites, 1) array of the initial pseudorange of each satellite. 
+    GPS_pos_0: A (# of Satellites, 3) array of the initial position of each satellite.
+    GPS_pos_matrix: A (# of Satellites * # timestep of timesteps, 3) array of each satellite position for each timestep (array excludes initial satellite positions).
+    AC_dt: A (# of timesteps,) array of the difference in time between each data point timestamp.
+    AC_x0: A (# of states,) array of the initial state of the aircraft receiver.
+    truth_table: A (# of timesteps, # of states) array of the state of the aircraft for each timestep. (array exclude initial aircraft state)     
     '''
+
     # Read in L1 pseudoranges for satellites (3,4,9,16,22,26,27,31)
     GPS_PR = pd.read_csv('./PRtrunc_resize.csv', header= None, usecols=[3]).to_numpy()
 
@@ -77,6 +86,16 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
         
 
 def enu2ecef_vel(AC_vel, ENU_cfp):
+    '''
+    This function is used to convert ENU velocity to ECEF velocity.  Matrix math received from Dr. Leishman (Textbook he owned)
+
+    Args:
+    AC_vel: A (# of timesteps, 3) array of the aircrafts velocity in x,y, and z axis in ENU coordinate system.
+    ENU_cfp: ENU Center fixed point in Geodetic Coords radians.
+
+    Returns:
+    AC_ECEF_vel: A (# of timesteps, 3) array of the aircrafts velocity in x,y, and z axis in ECEF coordinate system.
+    '''
     
     AC_ECEF_vel = np.zeros((len(AC_vel), 3))
     for i in range(len(AC_vel)):
@@ -91,7 +110,18 @@ def enu2ecef_vel(AC_vel, ENU_cfp):
     return AC_ECEF_vel
 
 def enu2ecef_pos(ENU_data, ENU_cfp, ENU_cfp_ECEF):
-    
+    '''
+    This function is used to convert ENU position data to ECEF positional data.
+
+    Args:
+    ENU_data: A (# of timesteps, 3) array of the aircrafts positional data in x,y, and z axis for the ENU coordinate system.
+    ENU_cfp: ENU Center fixed point in Geodetic Coords radians.
+    ENU_cfp_ECEF: ENU Center fixed point in ECEF meters.
+
+    Returns:
+    ECEF_data: A (# of timesteps, 3) array of the aircrafts positional data in x,y, and z axis for the ECEF coordinate system.
+    '''
+
     ECEF_data = np.zeros((len(ENU_data), 3))
     for i in range(len(ENU_data)):
         ECEF_conv = np.array([[-sin(ENU_cfp[1]), -sin(ENU_cfp[0])*cos(ENU_cfp[1]), cos(ENU_cfp[0])*cos(ENU_cfp[1])],
@@ -105,24 +135,27 @@ def enu2ecef_pos(ENU_data, ENU_cfp, ENU_cfp_ECEF):
     return ECEF_data
 
 
-def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt):
+def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P):
     '''
     This function handles the EKF process of the RAIM and returns the H matrix (meas matrix) and residuals
 
     Args:
-        sat_ENU: an (num sat,3) array of ENU coordinates of satellites
-        sens_meas: an (num truth/s_dt, num sat) array of psuedorange measurements
+        sat_ENU: an (num sat,3) array of ENU coordinates of satellites of the current timestep
+        sens_meas: an (num sat,) array of actual psuedorange measurements of each satellite of the current timestep
+        dt: a float number of the difference in time between each data point timestamp 
         curr_x: an (8,) array of the users current state
         curr_P: an (8,8) array of the users current covariance
-        Q: an (8,8) array for state error covariance matrix
-        R: an (num sat, num sat) array for measurement covariance matrix
 
-    Returns:
-        curr_x: an (8,) array of the users current state (updated)
-        curr_P: an (8,8) array of the users current covariance (updated)
-        K: an (8, num sat) array of the Kalman Gain
-        H: an (num sat, 8) array of the (H matrix) measurement matrix
-        res: an (num sat,) array of the residuals of the pseudorange measurements
+
+    Returns:  pred_meas
+        curr_x: an (# of states,) array of the users current state (updated)
+        curr_P: an (# of states, # of states) array of the users current covariance (updated)
+        K: an (# of states, # of satellites) array of the Kalman Gain
+        H: an (# of satellites, # of states) array of the (H matrix) measurement matrix
+        res: an (# of satellites,) array of the residuals of the pseudorange measurements
+        res_cov: an (# of satellites, # of satellites) array of the residual error covariance matrix
+        st_res: an (# of satellites,) array of standardized residuals. (Used for sequential local test)
+        pred_meas: an (# of satellites,) array of the predicted pseudorange measurements of each satellite
     '''
 
     # Constants from ARMAS EKF setup
@@ -209,56 +242,43 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt):
     # Kalman Gain
     K = (curr_P.dot(H.T)).dot(la.inv(res_cov))
 
-
-    # # Take Cholesky of residual covariance
-    # # Equation given by Dr.Leishman from matlab code
-    # L_res_cov = np.linalg.cholesky(res_cov)
-
-    # ## Normalize Residual
-    # # Equation given by Dr.Leishman from matlab code
-    # norm_res = la.inv(L_res_cov).dot(res)
-
     # Standardize residuals for local test
     st_res = np.zeros(len(res))
     # Pull out diagonal of res covariance matrix
     res_cov_diag = np.diagonal(res_cov)
     for i in range(len(res)):
         st_res[i] = np.abs(res[i]/np.sqrt(res_cov_diag[i]))
-    
-    # Sum of Square Residual
-    SS_res = res.T.dot(res)
 
-    return curr_x, curr_P, K, H, res, res_cov, st_res, SS_res, pred_meas
+
+    return curr_x, curr_P, K, H, res, res_cov, st_res, pred_meas
 
 
 
 def RAIM_chi2_global(res):
     '''
-    This function handles the RAIM chi2 cumulative test statistic to verify statistic is
-    within the threshold for Cumulative KF Test statistic
+    This function handles find the values needed to run the global test of RBRAIM. Based on the paper 
+    'GPS RAIM: Statistics Based Improvement on the Calculation of Threshold and Horizontal Protection Radius'.
+    It take the sum of square error of the residuals to create a test statistic.  This test statistic follows a 
+    central chi square distribution.  When it becomes noncentral, an alert should go off notifying that there is an issue  
+    with the measurements received.  To know when it the statistic becomes noncentral, a threshold is set by finding the 
+    normalized chi-square value based on the probability of a false alarm (good measurement but marked as bad)
+    and degrees of freedom (# sat - est. states).
 
     Args:
-        curr_x: an (8,) array of the users current state
-        curr_P: an (8,8) array of the users current covariance
-        R: an (num sat, num sat) array for measurement covariance matrix
-        H: an (num sat, 8) array of the (H matrix) measurement matrix
-        res: an (num sat,) array of the residuals of the pseudorange measurements
+        res: an (# of satellites,) array of the residuals of the pseudorange measurements for each satellite
 
-    Returns:
-        res_list:
-        cum_thres:
-        thres:
+    Returns: test_stat, thres, local_Pfa
+        test_stat: a float number that represents the scale of the total error of pseudorange residuals (test statistic)
+        thres: a float number that represents the threshold of how big the test statistic can get before alerting the system of an issue. (global threshold)
+        local_Pfa: a float number representing the probability of false alarm for the local test. Found by relation between the global false alarm probability
     '''
 
-    ## Test statistic (RAIM Portion)
+    ## Test statistic
     # GPS RAIM: Statistics Based Improvement on the Calculation of Threshold and Horizontal Protection Radius Jiaxing Liu, Mingquan Lu, Zhenming Feng
     test_stat = np.sqrt(res.T.dot(res))
-    # GNSS Signal Reliability Testing in Urban and Indoor Environments Heidi Kuusniemi*, Gérard Lachapelle
-    # Test Statistic Variance
-    # test_stat_var = res.T.dot(res)/(len(res)-4)
+    
     # In aviation systems Pfa is fixed to Pfa is fixed at 1/15000.
     global_Pfa = 1/15000
-
     local_Pfa = .0001
     b0 = .19
    
@@ -270,10 +290,6 @@ def RAIM_chi2_global(res):
     thres_b = (st.chi2.ppf(q = b0, df= 4,loc=local_thres**2))
     thres_a = st.chi2.ppf(q = 1-global_Pfa, df= 4)
     
-    
-    # GNSS Signal Reliability Testing in Urban and Indoor Environments Heidi Kuusniemi*, Gérard Lachapelle
-    # Threshold variance
-    # thres_var = st.chi2.ppf(q = 1-global_Pfa, df= (len(res)-4))/(len(res)-4)
 
     # GPS RAIM: Statistics Based Improvement on the Calculation of Threshold and Horizontal Protection Radius Jiaxing Liu, Mingquan Lu, Zhenming Feng
     # Find inverse chi squared for threshold (normalized chi2 threshold w/ num of satellites - 4 degrees of freedom [pos and clock bias])
@@ -284,19 +300,34 @@ def RAIM_chi2_global(res):
 def local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU):
     '''
     This function handles the RAIM sequential local test that will sequentially verify each 
-    of the original chosen satellites to detect and exclude the satellite that has a bias.
+    of the observable satellites to detect if there is an actual issue/bias and then 
+    exclude the satellite if there a bias. From there it recalculates the H and K matrices
+    without the biased satellite to get a more accurate predicted pseudorange and residual
+    to be used when updating the current state and state error covariance.Based on 
+    "GNSS Signal Reliability Testing in Urban and Indoor Environments" Model "FDE A". 
 
-    Args:
-        i: an int that shows the timestep/number of the coordinate/user ECEF currently
-        reserve_sat_ECEF: an (n,3) array of the reserved satellites position that weren't originally chosen
-        usr_ECEF: a (num_coords,3) array of user position
-        Cdt: set clock error 
-        pred_meas: an (num sat,) array of predicted pseudoranges to find residuals
-        diag_sqrtres: an (num sat,) array of the standard deviation of the state (diagonal of sqrt residuals)
+    Args: res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU
+        res: an (# of satellites,) array of the residuals of the pseudorange measurements for each satellite
+        res_cov: an (# of satellites, # of satellites) array of the residual error covariance matrix
+        st_res: an (# of satellites,) array of standardized residuals.
+        st_res_err: an array of the standardized residuals that are suspected to be erroneous
+        num_st_res_err: a count of how many standardized residuals that are suspected to be erroneous (helps keep track of how many times the test should be run)
+        n: the variable used to keep track of if this is the first time the sequential test has been run
+        curr_x: an (8,) array of the users current state
+        curr_P: an (8,8) array of the users current covariance
+        sens_meas: an (num sat,) array of actual psuedorange measurements of each satellite of the current timestep
+        sat_ENU: an (num sat,3) array of ENU coordinates of satellites of the current timestep
         
-    Returns:
-        nothing
+    Returns: sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err
+        sens_meas: an (num sat,) array of actual psuedorange measurements of each satellite of the current timestep (updated after dropped satellite)
+        sat_ENU: an (num sat,3) array of ENU coordinates of satellites of the current timestep (updated after dropped satellite)
+        H: an (# of satellites, # of states) array of the (H matrix) measurement matrix (updated after dropped satellite)
+        pred_meas: an (# of satellites,) array of the predicted pseudorange measurements of each satellite (updated after dropped satellite)
+        res: an (# of satellites,) array of the residuals of the pseudorange measurements for each satellite (updated after dropped satellite)
+        K: an (# of states, # of satellites) array of the Kalman Gain (updated after dropped satellite)
+        num_st_res_err: a count of how many standardized residuals that are suspected to be erroneous (helps keep track of how many times the test should be run)
     '''
+
     if n != 0:
         # Standardize residuals for local test
         st_res = np.zeros(len(res))
@@ -339,8 +370,8 @@ def local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, 
 
     # Predicted Pseudorange Measurement (h(x) formula)
     pred_meas = np.zeros(len(sat_ENU))
-    for n, sat_pos in enumerate(sat_ENU):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2) + curr_x[9]
+    for i, sat_pos in enumerate(sat_ENU):
+        pred_meas[i] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2) + curr_x[9]
 
     # Residuals (eq 26/eq 32 but using hx formula rather than Hx)
     res = sens_meas - pred_meas
@@ -351,16 +382,29 @@ def local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, 
     # Kalman Gain
     K = (curr_P.dot(H.T)).dot(la.inv(res_cov))
 
-    # Sum of Square Residual
-    SS_res = res.T.dot(res)
-
     # Subtract of recursive local test tracker
     num_st_res_err =- 1
         
-    return sens_meas, sat_ENU, H, pred_meas, res, K, SS_res, num_st_res_err
+    return sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err
 
 
 def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
+    '''
+    This function plots the state error between the true state and the estimated state of the 
+    position and velocity for the x,y, and z axis.  The sigma bounds of the covariance is also
+    plotted to show how well the EKF is doing for each state.
+
+    Args: 
+    num_coords: The number of timesteps in the flight data
+    truth_table: A (# of timesteps, # of states) array of the state of the aircraft for each timestep. (array exclude initial aircraft state)
+    est_state_mat: A (# of timesteps, # of states) array of the estimated state of the aircraft for each timestep
+    cov_bounds: A (# of timesteps, # of states) array of the standard covariance. (Used to create upper and lower sigma bounds)
+    AC_dt: A (# of timesteps,) array of the difference in time between each data point timestamp. (Used to create a timestep for plots) 
+
+    Returns:
+    state_error: A (# of timesteps, # of states) array of the difference between the truth and predicted states for each timestep
+    '''
+
     # Make timestep for plot
     timestep = np.zeros(num_coords)
     t = 0
@@ -445,22 +489,26 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     plt.xlabel('Time (secs)')
     plt.ylabel('User Velocity Error z-axis (m/s)')
     plt.legend()
-
-    # Plotting Truth vs Predicted User Clock Error
-    plt.figure()
-    plt.title('User Clock error')
-    plt.plot(timestep, state_error[:,6], label = "Error")
-    plt.plot(timestep, up_bound[:,6], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,6], color = 'black', label = "Lower Bound")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Clock Error')
-    plt.legend()
-
     
     plt.show()
     return state_error
 
 def plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt):
+    '''
+    This function plots the Normalized Estimation Error Square (NEES) of the system.  This test is used to see
+    how optimistic or pessimistic the filter is. A perfect filter NEES plot should be around the number of states
+    estimated. In this code we are using only the position estimates so the average NEES (ANEES) shouldn't be significantly
+    lower or higher than 3.
+
+    Args: 
+    num_coords: The number of timesteps in the flight data
+    state_error: A (# of timesteps, # of states) array of the difference between the truth and predicted states for each timestep
+    NEES_cov_mat: A (# of timesteps, # of est states, # of est states) array of the estimated state error covariance. (used to create NEES array)
+    AC_dt: A (# of timesteps,) array of the difference in time between each data point timestamp. (Used to create a timestep for plots) 
+
+    Returns:
+    Nothing
+    '''
     # Make timestep for plot
     timestep = np.zeros(num_coords)
     t = 0
@@ -497,6 +545,17 @@ def plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt):
     return          
 
 def plot_res(SV_res_mat, thres_mat, AC_dt):
+    '''
+    This function plots the pseudorange measurement residuals of each satellite over the timesteps.
+
+    Args: 
+    SV_res_mat: a (# of timesteps, # of satellites) array of the pseudorange residuals of each satellite for each time timestep
+    thres_mat: (not being used currently)
+    AC_dt: A (# of timesteps,) array of the difference in time between each data point timestamp. (Used to create a timestep for plots) 
+
+    Returns:
+    Nothing
+    '''
     # Make timestep for plot
     timestep = np.zeros(len(AC_dt))
     t = 0
@@ -663,7 +722,7 @@ for i in range(num_coords):
         print('\n')
 
         # EKF
-        curr_x, curr_P, K, H, res, res_cov, st_res, SS_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, res_cov, st_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
         SV_res_mat[i] = np.insert(res, idx_nan_meas[0], 0)
 
     elif nan_meas.any() == True and nan_meas.all() == False:
@@ -674,7 +733,7 @@ for i in range(num_coords):
         sat_ENU = np.delete(sat_ENU, idx_nan_meas, axis=0)
 
         # EKF
-        curr_x, curr_P, K, H, res, res_cov, st_res, SS_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, res_cov, st_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
 
         # RAIM chi2 global statistic check
         test_stat, thres, local_Pfa = RAIM_chi2_global(res)
@@ -712,7 +771,7 @@ for i in range(num_coords):
             if is_empty == False:
                 print(f'RECURSIVE LOCAL TEST:')
                 for n in range(num_st_res_err):
-                    sens_meas, sat_ENU, H, pred_meas, res, K, SS_res, num_st_res_err = local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
+                    sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err = local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
 
             # Rerun Global Test for final verification
             test_stat, thres, local_Pfa = RAIM_chi2_global(res)
@@ -762,7 +821,7 @@ for i in range(num_coords):
     
     else:
         # EKF
-        curr_x, curr_P, K, H, res, res_cov, st_res, SS_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, res_cov, st_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
 
         # RAIM chi2 global statistic check
         test_stat, thres, local_Pfa = RAIM_chi2_global(res)
@@ -800,7 +859,7 @@ for i in range(num_coords):
             if is_empty == False:
                 print(f'RECURSIVE LOCAL TEST:')
                 for n in range(num_st_res_err):
-                    sens_meas, sat_ENU, H, pred_meas, res, K, SS_res, num_st_res_err = local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
+                    sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err = local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
 
             # Rerun Global Test for final verification
             test_stat, thres, local_Pfa = RAIM_chi2_global(res)
@@ -843,9 +902,9 @@ for i in range(num_coords):
 
 
 # Plot Error with covariance bound
-# state_error = plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt)
+state_error = plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt)
 # Plot Normalized Estimation Error Squared (NEES)
-# plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
+plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
 # Plot Cumulative Residual over time
 plot_res(SV_res_mat, thres_mat, AC_dt)
 print('done')
