@@ -1,9 +1,11 @@
+from cgi import test
 from multiprocessing.dummy import current_process
 import numpy as np
 import scipy.linalg as la
 from math import nan, pi, sin, cos, sqrt
 import matplotlib.pyplot as plt
 import pandas as pd
+import scipy.stats as st
 from gnc import vanloan
 
 
@@ -203,27 +205,34 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt):
 
     # Residual Covariance Matrix
     res_cov = H.dot(curr_P).dot(H.T) + R
-
+    
     # Kalman Gain
     K = (curr_P.dot(H.T)).dot(la.inv(res_cov))
 
-    # Take Cholesky of residual covariance
-    # Equation given by Dr.Leishman from matlab code
-    L_res_cov = np.linalg.cholesky(res_cov)
 
-    ## Normalize Residual
-    # Equation given by Dr.Leishman from matlab code
-    norm_res = la.inv(L_res_cov).dot(res)
+    # # Take Cholesky of residual covariance
+    # # Equation given by Dr.Leishman from matlab code
+    # L_res_cov = np.linalg.cholesky(res_cov)
+
+    # ## Normalize Residual
+    # # Equation given by Dr.Leishman from matlab code
+    # norm_res = la.inv(L_res_cov).dot(res)
+
+    # Standardize residuals for local test
+    st_res = np.zeros(len(res))
+    # Pull out diagonal of res covariance matrix
+    res_cov_diag = np.diagonal(res_cov)
+    for i in range(len(res)):
+        st_res[i] = np.abs(res[i]/np.sqrt(res_cov_diag[i]))
     
-    # Weighted Normal of Residual
-    # Equation given by Dr.Leishman from matlab code
-    wtd_norm_res = np.inner(norm_res.T,norm_res)
+    # Sum of Square Residual
+    SS_res = res.T.dot(res)
 
-    return curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas
-
+    return curr_x, curr_P, K, H, res, res_cov, st_res, SS_res, pred_meas
 
 
-def RAIM_chi2_global(res, res_win):
+
+def RAIM_chi2_global(res):
     '''
     This function handles the RAIM chi2 cumulative test statistic to verify statistic is
     within the threshold for Cumulative KF Test statistic
@@ -240,46 +249,39 @@ def RAIM_chi2_global(res, res_win):
         cum_thres:
         thres:
     '''
-    # Set window batch size
-    win_size = 10
-    res_win = np.asarray(res_win)
-
-    # If array is bigger than win size delete earliest entry
-    if len(res_win) > win_size:
-        res_win = np.delete(res_win, 0)
-
-    # Cumulative weighted norm residuals
-    cum_res = sum(res_win)
 
     ## Test statistic (RAIM Portion)
-    # Finding Threshold and setting Probability false alarm (Threshold found in article Weighted RAIM for Precision Approach)
-    # Pfa (prob of false alarm) of 0.1 and Pmd (prob of missed detection) of 0.2 was used in Integrity Monitoring in Navigation Systems: Fault Detection and Exclusion RAIM Algorithm Implementation
-    # In aviatioin systems Pfa is fixed to Pfa is fixed at 1/15000.
-    # Pfa is 3.3*10^-7 in Ryan S., Augmentation of DGPS for Marine Navigation, Ph.D. thesis, The University of Calgary, UCGE Report 20164, 2002, 248 p
-    Pfa = 10e-4
+    # GPS RAIM: Statistics Based Improvement on the Calculation of Threshold and Horizontal Protection Radius Jiaxing Liu, Mingquan Lu, Zhenming Feng
+    test_stat = np.sqrt(res.T.dot(res))
+    # GNSS Signal Reliability Testing in Urban and Indoor Environments Heidi Kuusniemi*, Gérard Lachapelle
+    # Test Statistic Variance
+    # test_stat_var = res.T.dot(res)/(len(res)-4)
+    # In aviation systems Pfa is fixed to Pfa is fixed at 1/15000.
+    global_Pfa = 1/15000
 
-    #Wang, Wenbo, and Ying Xu. "A modified residual-based RAIM algorithm for multiple outliers based on a robust MM estimation." Sensors 20.18 (2020): 5407.
-    #Test statistic T_rb = sqrt(r.T.dot(W.dot(r))/(num SV - num states- 3))
-    # GNSS Signal Reliability Testing in Urban and Indoor Environments by Heidi Kuusniemi
-    # Test statistic/variance factor = r.T.dot(la.inv(P)).dot(r)/(n-p) degrees of freedom
-    # variance of threshold = chi-square threshold / (n-p) degrees of freedom
+    local_Pfa = .0001
+    b0 = .19
+   
+    # Method of finding ab equal noncentrality parameter for both global and local test. (allows relation between global test alpha and local test alpha)
+    # GNSS Signal Reliability Testing in Urban and Indoor Environments Heidi Kuusniemi*, Gérard Lachapelle
+    n1alp = st.norm.ppf(q=1-(local_Pfa/2))
+    n1bet = st.norm.ppf(q=1-b0)
+    local_thres = (n1alp + n1bet)
+    thres_b = (st.chi2.ppf(q = b0, df= 4,loc=local_thres**2))
+    thres_a = st.chi2.ppf(q = 1-global_Pfa, df= 4)
+    
+    
+    # GNSS Signal Reliability Testing in Urban and Indoor Environments Heidi Kuusniemi*, Gérard Lachapelle
+    # Threshold variance
+    # thres_var = st.chi2.ppf(q = 1-global_Pfa, df= (len(res)-4))/(len(res)-4)
 
-    # Find inverse chi squared for threshold (m)
-    # thres = st.chi2.isf(q = 1-Pfa, df=(num_SVs*win_size))
-    thres = 50.00
-
-    # spoofed_sat = np.argmax(res)
-    # spoofed_sat_res = np.max(np.absolute(res))
-    # print(f'Satellite {spoofed_sat} is invalid')
-    # print(f'{spoofed_sat_res} m off')
-    # print('\n')
+    # GPS RAIM: Statistics Based Improvement on the Calculation of Threshold and Horizontal Protection Radius Jiaxing Liu, Mingquan Lu, Zhenming Feng
+    # Find inverse chi squared for threshold (normalized chi2 threshold w/ num of satellites - 4 degrees of freedom [pos and clock bias])
+    thres = st.chi2.ppf(q = 1-global_Pfa, df= 4)
         
-    # Convert back to list to use append
-    print(type(res_win))
-    res_list = res_win.tolist()
-    return res_list, cum_res, thres
+    return test_stat, thres, local_Pfa
 
-def local_seq_test(curr_x, sens_meas, rho_error, i, sat_ENU, spoofed_sat):
+def local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU):
     '''
     This function handles the RAIM sequential local test that will sequentially verify each 
     of the original chosen satellites to detect and exclude the satellite that has a bias.
@@ -291,190 +293,72 @@ def local_seq_test(curr_x, sens_meas, rho_error, i, sat_ENU, spoofed_sat):
         Cdt: set clock error 
         pred_meas: an (num sat,) array of predicted pseudoranges to find residuals
         diag_sqrtres: an (num sat,) array of the standard deviation of the state (diagonal of sqrt residuals)
-        res_win: an (>=10,) array of the residuals of the pseudorange measurements based on a chosen window size
-
+        
     Returns:
         nothing
     '''
-    # Remove faulty satellite 
-    del chose_sat_ECEF[spoofed_sat]
-    # Remove sensor pseudorange measurement from faulty satellite
-    sens_meas = np.delete(sens_meas, spoofed_sat)
-    # Change Measurement Covariance Matrix to a 4x4
-    R = np.eye(len(chose_sat_ECEF))*rho_error
+    if n != 0:
+        # Standardize residuals for local test
+        st_res = np.zeros(len(res))
+        # Pull out diagonal of res covariance matrix
+        res_cov_diag = np.diagonal(res_cov)
+        for i in range(len(res)):
+            st_res[i] = np.abs(res[i]/np.sqrt(res_cov_diag[i]))
 
-    # Refind H matrix (Measurement Matrix) w/o the faulty matrix 
-    H = np.zeros((len(chose_sat_ECEF), len(curr_x)))
-    for cnt, sat_pos in enumerate(chose_sat_ECEF):
+        for k in range(len(st_res)):
+            if st_res[k] < local_thres:
+                print(f'Standardized Res {k} ACCEPTABLE')
+        
+            else:
+                print(f'Standardized Res {k} ERRONEOUS')
+                st_res_err.append(st_res[k])
+    
+        st_res_err = np.array(st_res_err)
+    
+    st_res_max = np.max(st_res_err)
+    st_res_max_idx = np.where(st_res == st_res_max)
+    sat_ENU = np.delete(sat_ENU, st_res_max_idx)
+    sens_meas = np.delete(sens_meas, st_res_max_idx)
+
+    # Build Measurement Error Covariance Matrix
+    rho_error = 2.0
+    R = np.eye(len(sens_meas)) * rho_error**2
+
+    # Build H Matrix (Measurement Matrix)
+    H = np.zeros((len(sat_ENU), len(curr_x)))
+    for cnt, sat_pos in enumerate(sat_ENU):
         part_x = -(sat_pos[0] - curr_x[0]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
         part_y = -(sat_pos[1] - curr_x[3]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
         part_z = -(sat_pos[2] - curr_x[6]) / np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2)
         part_cdt = 1.
 
         H[cnt,0] = part_x
-        H[cnt,2] = part_y
-        H[cnt,4] = part_z
-        H[cnt,6] = part_cdt
+        H[cnt,3] = part_y
+        H[cnt,6] = part_z
+        H[cnt,9] = part_cdt
 
-    # Refind the Predicted Pseudorange Measurement (h(x) formula) w/o the faulty matrix 
-    pred_meas = np.zeros(len(chose_sat_ECEF))
-    for n, sat_pos in enumerate(chose_sat_ECEF):
-        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2) + Cdt
+    # Predicted Pseudorange Measurement (h(x) formula)
+    pred_meas = np.zeros(len(sat_ENU))
+    for n, sat_pos in enumerate(sat_ENU):
+        pred_meas[n] = np.sqrt((sat_pos[0] - curr_x[0])**2 + (sat_pos[1] - curr_x[3])**2 + (sat_pos[2] - curr_x[6])**2) + curr_x[9]
 
-    # Refind Residuals (eq 26/eq 32 but using hx formula rather than Hx) w/o the faulty matrix 
+    # Residuals (eq 26/eq 32 but using hx formula rather than Hx)
     res = sens_meas - pred_meas
 
-    # Refind Residual Covariance Matrix w/o the faulty matrix 
+    # Residual Covariance Matrix
     res_cov = H.dot(curr_P).dot(H.T) + R
-
-    # Refind Kalman Gain w/o the faulty matrix 
+    
+    # Kalman Gain
     K = (curr_P.dot(H.T)).dot(la.inv(res_cov))
 
-    # Pull a satellite from reserved satellite list and add to chose list
-    res_sat = reserve_sat_ECEF[0]
-    del reserve_sat_ECEF[0]
-    chose_sat_ECEF.append(res_sat)
+    # Sum of Square Residual
+    SS_res = res.T.dot(res)
 
-    # Find Pseudorange for reserve satellite and add it to end of matrix
-    res_meas = np.zeros(len(sens_meas_mat))
-    for n in range(len(res_meas)):
-        # Pseudoranges from the chosen ECEF
-        usr_pos = usr_ECEF[n, :]
-        res_meas[n] = np.sqrt((res_sat[0] - usr_pos[0])**2 + (res_sat[1] - usr_pos[1])**2 + (res_sat[2] - usr_pos[2])**2) + Cdt
-
-
-    # Pull out biased pseudorange up til trigger point for plotting 
-    bias_sat_meas_mat = sens_meas_mat[:i, spoofed_sat]
-
-    # Pull out biased predicted up til trigger point for plot
-    bias_sat_meas_pred_mat = pred_mat[:i, spoofed_sat]
-
-    # Replace biased satellite measurements with new reserved measurements
-    res_meas = res_meas.reshape((len(res_meas),1))
-    sens_meas_mat = np.delete(sens_meas_mat, spoofed_sat, 1)
-    sens_meas_mat = np.append(sens_meas_mat, res_meas, 1)
+    # Subtract of recursive local test tracker
+    num_st_res_err =- 1
         
-    return H, res, K, sat_ENU, sens_meas, pred_meas
+    return sens_meas, sat_ENU, H, pred_meas, res, K, SS_res, num_st_res_err
 
-def plot_pseudo(valid_sat_meas_mat, bias_sat_meas_mat, valid_pred_sat_meas_mat, bias_sat_meas_pred_mat, num_coords, s_dt):
-    t = np.arange(0, num_coords, s_dt)
-
-    # Valid Satellite 0 Psuedorange Plot
-    plt.figure()
-    plt.title('Psuedorange vs Time for Valid Sat 0')
-    plt.plot(t, valid_sat_meas_mat[:,0], label = "Truth")
-    plt.plot(t, valid_pred_sat_meas_mat[:,0], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
-    plt.legend()
-
-    # Valid Satellite 1 Psuedorange Plot
-    plt.figure()
-    plt.title('Psuedorange vs Time for Valid Sat 1')
-    plt.plot(t, valid_sat_meas_mat[:,1], label = "Truth")
-    plt.plot(t, valid_pred_sat_meas_mat[:,1], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
-    plt.legend()
-
-    # Valid Satellite 2 Psuedorange Plot
-    plt.figure()
-    plt.title('Psuedorange vs Time for Valid Sat 2')
-    plt.plot(t, valid_sat_meas_mat[:,2], label = "Truth")
-    plt.plot(t, valid_pred_sat_meas_mat[:,2], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
-    plt.legend()
-
-    # Valid Satellite 3 Psuedorange Plot
-    plt.figure()
-    plt.title('Psuedorange vs Time for Valid Sat 3')
-    plt.plot(t, valid_sat_meas_mat[:,3], label = "Truth")
-    plt.plot(t, valid_pred_sat_meas_mat[:,3], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
-    plt.legend()
-
-    # Biased Satellite Psuedorange Plot
-    plt.figure()
-    plt.title('Psuedorange vs Time for Biased Sat')
-    plt.plot(t, bias_sat_meas_mat, label = "Truth")
-    plt.plot(t, bias_sat_meas_pred_mat, label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('Psuedorange (m)')
-    plt.legend()
-
-    plt.show()
-
-    return
-
-def plot_coords(num_coords, truth_table, est_state_mat, AC_dt):
-    # Make timestep for plot
-    timestep = np.zeros(num_coords)
-    t = 0
-    for i in range(len(timestep)):
-        t += AC_dt[i]
-        timestep[i] = t
-
-    # Truth table should match timestep length
-    truth_table = truth_table[:num_coords,:]
-
-    # Plotting Truth vs Predicted User Coords x-axis
-    plt.figure()
-    plt.title('User coordinates for x-axis (ENU)')
-    plt.plot(timestep, truth_table[:,0], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,0], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Coords x-axis (m)')
-    plt.legend()
-
-    # Plotting Truth vs Predicted User Coords y-axis
-    plt.figure()
-    plt.title('User coordinates for y-axis (ENU)')
-    plt.plot(timestep, truth_table[:,2], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,3], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Coords y-axis (m)')
-    plt.legend()
-
-    # Plotting Truth vs Predicted User Coords z-axis
-    plt.figure()
-    plt.title('User coordinates for z-axis (ENU)')
-    plt.plot(timestep, truth_table[:,4], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,6], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Coords z-axis (m)')
-    plt.legend()
-
-    # Plotting Truth vs Predicted User velocity x-axis
-    plt.figure()
-    plt.title('User Velocity for x-axis (ENU)')
-    plt.plot(timestep, truth_table[:,1], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,1], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Velocity x-axis (m/s)')
-    plt.legend()
-
-    # Plotting Truth vs Predicted User velocity y-axis
-    plt.figure()
-    plt.title('User Velocity for y-axis (ENU)')
-    plt.plot(timestep, truth_table[:,3], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,4], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Velocity y-axis (m/s)')
-    plt.legend()
-
-    # Plotting Truth vs Predicted User velocity z-axis
-    plt.figure()
-    plt.title('User Velocity for z-axis (ENU)')
-    plt.plot(timestep, truth_table[:,5], label = "Truth")
-    plt.plot(timestep, est_state_mat[:,7], label = "Pred")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Velocity z-axis (m/s)')
-    plt.legend()
-    
-    plt.show()
-    return
 
 def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Make timestep for plot
@@ -612,12 +496,11 @@ def plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt):
     plt.show()
     return          
 
-def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
+def plot_res(SV_res_mat, thres_mat, AC_dt):
     # Make timestep for plot
     timestep = np.zeros(len(AC_dt))
     t = 0
     for i in range(len(timestep)):
-        res_arr = SV_res_mat[i]
         t += AC_dt[i]
         timestep[i] = t
 
@@ -697,15 +580,6 @@ def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     plt.ylabel('Residual (m)')
     plt.legend()
 
-    #Plotting residual and threshold each timestep
-    plt.figure()
-    plt.title('Cumulative Residual vs Time')
-    plt.plot(timestep, cum_res_mat[:], label = "Cum Residual")
-    plt.plot(timestep, thres_mat[:], label = "Threshold")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('Cumulative Residual (m)')
-    plt.legend()
-
     plt.show()
 
     return
@@ -729,10 +603,6 @@ Pr_std = 0.0
 # Real AC data
 GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot)
 
-# Insert initial PR and GPS position
-# GPS_pos_matrix = np.insert(GPS_pos_matrix, 0, GPS_pos_0, axis=0)
-# GPS_PR = np.insert(GPS_PR, 0, GPS_PR_0, axis=0)
-
 # Add in accceleration for initial state
 acc0 = np.array([0.,0.,0.])
 AC_x0 = np.insert(AC_x0, (2,4,6), (acc0[0], acc0[1], acc0[2]))
@@ -743,9 +613,8 @@ num_coords = int(len(AC_dt))
 num_SVs = 8
 # Initial Covariance (don't know bias)
 P0 = np.zeros((len(AC_x0),len(AC_x0)))
-d_array = [100,100,100,100,100,100,100,100,100,100]
+d_array = [100,1,10000,100,1,10000,100,1,10000,1,64000000]
 np.fill_diagonal(P0, d_array)
-
 
 # Set current state and current covariance
 curr_x = AC_x0
@@ -761,21 +630,16 @@ est_cov_mat = np.zeros((num_coords, len(AC_x0), len(AC_x0)))
 cov_bounds = np.zeros((num_coords, len(AC_x0)))
 
 # To store the sensor measurement and changes for plotting
-sens_meas_mat_plot = np.zeros((num_coords, num_SVs))
 sens_meas_mat = []
 
 # Residual matrix
 res_mat = []
 SV_res_mat = np.zeros((num_coords, num_SVs))
-cum_res_mat = np.zeros((num_coords))
 thres_mat = np.zeros((num_coords))
 
 # Predicted Pseudorange Matrix
 pred_mat = np.zeros((num_coords, num_SVs))
 pred_meas_mat = []
-
-## Make window size for residuals
-res_win = []
 
 # Normalized Estimation Error Squared (NEES) Matrix
 # NEES_cov_mat = np.zeros((num_coords, 6, 6))
@@ -795,11 +659,11 @@ for i in range(num_coords):
     
     if nan_meas.all() == True:
         print(f'Timestep: {i}')
-        print(f'ALL SATELLITE INFO IS UNNAVAILABLE')
+        print(f'All Satellite info is unnavailable')
         print('\n')
 
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, res_cov, st_res, SS_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
         SV_res_mat[i] = np.insert(res, idx_nan_meas[0], 0)
 
     elif nan_meas.any() == True and nan_meas.all() == False:
@@ -810,36 +674,58 @@ for i in range(num_coords):
         sat_ENU = np.delete(sat_ENU, idx_nan_meas, axis=0)
 
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, res_cov, st_res, SS_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
 
         # RAIM chi2 global statistic check
-        res_win.append(wtd_norm_res)
-        res_win, cum_res, thres = RAIM_chi2_global(res, res_win)
+        test_stat, thres, local_Pfa = RAIM_chi2_global(res)
 
-        # # Check if test statistic is within chi squared model for cumulative residual
-        # if cum_res < thres:
-        #     print(f'Coordinate Point {i} is valid')
-        #     print(f'All SVs are valid')
-        #     print('\n')
+        # Check if test statistic is within chi squared model for test statistic
+        if test_stat < thres:
+            print(f'GLOBAL TEST SUCCESS')
+            print('\n')
             
-        # else:
-        #     spoofed_sat = np.argmax(np.absolute(res))
-        #     spoofed_sat_res = np.max(np.absolute(res))
-        #     print(f'Coordinate Point {i} is invalid')
-        #     print(f'Satellites Residuals: {res}')
-        #     print(f'Satellite {spoofed_sat} issue')
-        #     print(f'{spoofed_sat_res} m off')
-        #     print('\n')
+        else:
+            print(f'GLOBAL TEST FAILURE')
+            print(f'Coordinate Point {i} Integrity Failure')
+            print('\n')
 
-        #     # Timestep when bias was caught
-        #     bias_catch_ts = i
-        #     # RAIM chi2 sequential local statistic check
-        #     H, res, K, sat_ENU, sens_meas, pred_meas = local_seq_test(curr_x, sens_meas, rho_error, i, sat_ENU, spoofed_sat)
-        #     # Clear residual window
-        #     res_win.clear()
-        #     # Add zero to end of sensor measurement and predicted measurement for plotting
-        #     sens_meas = np.append(sens_meas, 0.0)
-        #     pred_meas = np.append(pred_meas, 0.0)
+            print(f'LOCAL TEST:')
+            # Timestep when bias was caught
+            bias_catch_ts = i
+
+            local_thres = st.norm.ppf(q=1-(local_Pfa/2))
+            st_res_err = []
+            num_st_res_err = 0
+
+            for k in range(len(st_res)):
+                if st_res[k] < local_thres:
+                    print(f'Standardized Res {k} ACCEPTABLE')
+            
+                else:
+                    print(f'Standardized Res {k} ERRONEOUS')
+                    st_res_err.append(st_res[k])
+                    num_st_res_err += 1
+
+            st_res_err = np.array(st_res_err)
+            is_empty = st_res_err.size == 0
+
+            if is_empty == False:
+                print(f'RECURSIVE LOCAL TEST:')
+                for n in range(num_st_res_err):
+                    sens_meas, sat_ENU, H, pred_meas, res, K, SS_res, num_st_res_err = local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
+
+            # Rerun Global Test for final verification
+            test_stat, thres, local_Pfa = RAIM_chi2_global(res)
+
+            # Check if test statistic is within chi squared model for test statistic
+            print('FINAL GLOBAL TEST:')
+            if test_stat < thres:
+                print(f'Position Estimate {i} ACCEPTABLE')
+                print('\n')
+                
+            else:
+                print(f'Position Estimate {i} NOT RELIABLE')
+                print('\n')
 
         # Update state and covariance
         curr_x = curr_x + K.dot(res)
@@ -859,13 +745,9 @@ for i in range(num_coords):
 
         sens_meas_mat.append(sens_meas)
         pred_meas_mat.append(pred_meas)
-        # sens_meas_mat_plot[i] = sens_meas
-        # cum_res_mat[i] = cum_res
-        # thres_mat[i] = thres
         est_state_mat[i] = curr_x
         est_cov_mat[i] = curr_P
         cov_bounds[i] = std_cov
-        # pred_mat[i] = pred_meas
 
         # Saving Position and Velocity Covariance
         NEES_cov = curr_P
@@ -880,36 +762,58 @@ for i in range(num_coords):
     
     else:
         # EKF
-        curr_x, curr_P, K, H, res, wtd_norm_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
+        curr_x, curr_P, K, H, res, res_cov, st_res, SS_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P, Cdt)
 
         # RAIM chi2 global statistic check
-        res_win.append(wtd_norm_res)
-        res_win, cum_res, thres = RAIM_chi2_global(res, res_win)
+        test_stat, thres, local_Pfa = RAIM_chi2_global(res)
 
-        # # Check if test statistic is within chi squared model for cumulative residual
-        # if cum_res < thres:
-        #     print(f'Coordinate Point {i} is valid')
-        #     print(f'All SVs are valid')
-        #     print('\n')
+        # Check if test statistic is within chi squared model for test statistic
+        if test_stat < thres:
+            print(f'GLOBAL TEST SUCCESS')
+            print('\n')
             
-        # else:
-        #     spoofed_sat = np.argmax(np.absolute(res))
-        #     spoofed_sat_res = np.max(np.absolute(res))
-        #     print(f'Coordinate Point {i} is invalid')
-        #     print(f'Satellites Residuals: {res}')
-        #     print(f'Satellite {spoofed_sat} issue')
-        #     print(f'{spoofed_sat_res} m off')
-        #     print('\n')
+        else:
+            print(f'GLOBAL TEST FAILURE')
+            print(f'Coordinate Point {i} Integrity Failure')
+            print('\n')
 
-        #     # Timestep when bias was caught
-        #     bias_catch_ts = i
-        #     # RAIM chi2 sequential local statistic check
-        #     H, res, K, sat_ENU, sens_meas, pred_meas = local_seq_test(curr_x, sens_meas, rho_error, i, sat_ENU, spoofed_sat)
-        #     # Clear residual window
-        #     res_win.clear()
-        #     # Add zero to end of sensor measurement and predicted measurement for plotting
-        #     sens_meas = np.append(sens_meas, 0.0)
-        #     pred_meas = np.append(pred_meas, 0.0)
+            print(f'LOCAL TEST:')
+            # Timestep when bias was caught
+            bias_catch_ts = i
+
+            local_thres = st.norm.ppf(q=1-(local_Pfa/2))
+            st_res_err = []
+            num_st_res_err = 0
+
+            for k in range(len(st_res)):
+                if st_res[k] < local_thres:
+                    print(f'Standardized Res {k} ACCEPTABLE')
+            
+                else:
+                    print(f'Standardized Res {k} ERRONEOUS')
+                    st_res_err.append(st_res[k])
+                    num_st_res_err += 1
+
+            st_res_err = np.array(st_res_err)
+            is_empty = st_res_err.size == 0
+
+            if is_empty == False:
+                print(f'RECURSIVE LOCAL TEST:')
+                for n in range(num_st_res_err):
+                    sens_meas, sat_ENU, H, pred_meas, res, K, SS_res, num_st_res_err = local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
+
+            # Rerun Global Test for final verification
+            test_stat, thres, local_Pfa = RAIM_chi2_global(res)
+
+            # Check if test statistic is within chi squared model for test statistic
+            print('FINAL GLOBAL TEST:')
+            if test_stat < thres:
+                print(f'Position Estimate {i} ACCEPTABLE')
+                print('\n')
+                
+            else:
+                print(f'Position Estimate {i} NOT RELIABLE')
+                print('\n')
 
         # Update state and covariance
         curr_x = curr_x + K.dot(res)
@@ -921,17 +825,12 @@ for i in range(num_coords):
         # # Store for plotting
         res_mat.append(res)
         SV_res_mat[i] = res
-        # mean_res[i] = np.mean(res)
 
         sens_meas_mat.append(sens_meas)
         pred_meas_mat.append(pred_meas)
-        # sens_meas_mat_plot[i] = sens_meas
-        # cum_res_mat[i] = cum_res
-        # thres_mat[i] = thres
         est_state_mat[i] = curr_x
         est_cov_mat[i] = curr_P
         cov_bounds[i] = std_cov
-        # pred_mat[i] = pred_meas
 
         # Saving Position and Velocity Covariance
         NEES_cov = curr_P
@@ -942,99 +841,13 @@ for i in range(num_coords):
         NEES_cov = np.delete(NEES_cov, [1,3,5], 0)
         NEES_cov_mat[i] = NEES_cov
 
-# Plotting and Tables
-# Reorganize matrices to plot satellites accurately
-# if spoofed_sat == 0:
-#     valid_gps_0 = sens_meas_mat_plot[:bias_catch_ts,1]
-#     valid_gps_0 = np.append(valid_gps_0, sens_meas_mat_plot[bias_catch_ts:,0])
-#     valid_gps_1 = sens_meas_mat_plot[:bias_catch_ts,2]
-#     valid_gps_1 = np.append(valid_gps_1, sens_meas_mat_plot[bias_catch_ts:,1])
-#     valid_gps_2 = sens_meas_mat_plot[:bias_catch_ts,3]
-#     valid_gps_2 = np.append(valid_gps_2, sens_meas_mat_plot[bias_catch_ts:,2])
-#     valid_gps_3 = sens_meas_mat_plot[:bias_catch_ts,4]
-#     valid_gps_3 = np.append(valid_gps_3, sens_meas_mat_plot[bias_catch_ts:,3])
 
-#     pred_gps_0 = pred_mat[:bias_catch_ts,1]
-#     pred_gps_0 = np.append(pred_gps_0, pred_mat[bias_catch_ts:,0])
-#     pred_gps_1 = pred_mat[:bias_catch_ts,2]
-#     pred_gps_1 = np.append(pred_gps_1, pred_mat[bias_catch_ts:,1])
-#     pred_gps_2 = pred_mat[:bias_catch_ts,3]
-#     pred_gps_2 = np.append(pred_gps_2, pred_mat[bias_catch_ts:,2])
-#     pred_gps_3 = pred_mat[:bias_catch_ts,4]
-#     pred_gps_3 = np.append(pred_gps_3, pred_mat[bias_catch_ts:,3])
-
-# elif spoofed_sat == 1:
-#     valid_gps_0 = sens_meas_mat_plot[:,0]
-#     valid_gps_1 = sens_meas_mat_plot[:bias_catch_ts,2]
-#     valid_gps_1 = np.append(valid_gps_1, sens_meas_mat_plot[bias_catch_ts:,1])
-#     valid_gps_2 = sens_meas_mat_plot[:bias_catch_ts,3]
-#     valid_gps_2 = np.append(valid_gps_2, sens_meas_mat_plot[bias_catch_ts:,2])
-#     valid_gps_3 = sens_meas_mat_plot[:bias_catch_ts,4]
-#     valid_gps_3 = np.append(valid_gps_3, sens_meas_mat_plot[bias_catch_ts:,3])
-
-#     pred_gps_0 = pred_mat[:,0]
-#     pred_gps_1 = pred_mat[:bias_catch_ts,2]
-#     pred_gps_1 = np.append(pred_gps_1, pred_mat[bias_catch_ts:,1])
-#     pred_gps_2 = pred_mat[:bias_catch_ts,3]
-#     pred_gps_2 = np.append(pred_gps_2, pred_mat[bias_catch_ts:,2])
-#     pred_gps_3 = pred_mat[:bias_catch_ts,4]
-#     pred_gps_3 = np.append(pred_gps_3, pred_mat[bias_catch_ts:,3])
-
-# elif spoofed_sat == 2:
-#     valid_gps_0 = sens_meas_mat_plot[:,0]
-#     valid_gps_1 = sens_meas_mat_plot[:,1]
-#     valid_gps_2 = sens_meas_mat_plot[:bias_catch_ts,3]
-#     valid_gps_2 = np.append(valid_gps_2, sens_meas_mat_plot[bias_catch_ts:,2])
-#     valid_gps_3 = sens_meas_mat_plot[:bias_catch_ts,4]
-#     valid_gps_3 = np.append(valid_gps_3, sens_meas_mat_plot[bias_catch_ts:,3])
-
-#     pred_gps_0 = pred_mat[:,0]
-#     pred_gps_1 = pred_mat[:,1]
-#     pred_gps_2 = pred_mat[:bias_catch_ts,3]
-#     pred_gps_2 = np.append(pred_gps_2, pred_mat[bias_catch_ts:,2])
-#     pred_gps_3 = pred_mat[:bias_catch_ts,4]
-#     pred_gps_3 = np.append(pred_gps_3, pred_mat[bias_catch_ts:,3])
-
-# elif spoofed_sat == 3:
-#     valid_gps_0 = sens_meas_mat_plot[:,0]
-#     valid_gps_1 = sens_meas_mat_plot[:,1]
-#     valid_gps_2 = sens_meas_mat_plot[:,2]
-#     valid_gps_3 = sens_meas_mat_plot[:bias_catch_ts,4]
-#     valid_gps_3 = np.append(valid_gps_3, sens_meas_mat_plot[bias_catch_ts:,3])
-
-#     pred_gps_0 = pred_mat[:,0]
-#     pred_gps_1 = pred_mat[:,1]
-#     pred_gps_2 = pred_mat[:,2]
-#     pred_gps_3 = pred_mat[:bias_catch_ts,4]
-#     pred_gps_3 = np.append(pred_gps_3, pred_mat[bias_catch_ts:,3])
-
-# elif spoofed_sat == 4:
-#     valid_gps_0 = sens_meas_mat_plot[:,0]
-#     valid_gps_1 = sens_meas_mat_plot[:,1]
-#     valid_gps_2 = sens_meas_mat_plot[:,2]
-#     valid_gps_3 = sens_meas_mat_plot[:,3]
-
-#     pred_gps_0 = pred_mat[:,0]
-#     pred_gps_1 = pred_mat[:,1]
-#     pred_gps_2 = pred_mat[:,2]
-#     pred_gps_3 = pred_mat[:,3]
-
-# valid_sat_meas_mat = np.vstack((valid_gps_0,valid_gps_1,valid_gps_2,valid_gps_3)).T
-# valid_pred_sat_meas_mat = np.vstack((pred_gps_0,pred_gps_1,pred_gps_2,pred_gps_3)).T
-# bias_sat_meas_mat = np.append(bias_sat_meas_mat, sens_meas_mat_plot[bias_catch_ts:, -1])
-# bias_sat_meas_pred_mat = np.append(bias_sat_meas_pred_mat, pred_mat[bias_catch_ts:, -1])
-
-
-# Plot Psuedoranges of measurements and predicted measurements 
-# plot_pseudo(valid_sat_meas_mat, bias_sat_meas_mat, valid_pred_sat_meas_mat, bias_sat_meas_pred_mat, num_coords, s_dt)
-# Plot Truth coordinates to Predicted Coordinates
-# plot_coords(num_coords, truth_table, est_state_mat, AC_dt)
 # Plot Error with covariance bound
-state_error = plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt)
+# state_error = plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt)
 # Plot Normalized Estimation Error Squared (NEES)
-plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
+# plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
 # Plot Cumulative Residual over time
-plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt)
+plot_res(SV_res_mat, thres_mat, AC_dt)
 print('done')
 # Convert Residual data to CSV for Excel Table
 # np.savetxt("residuals.csv", res_mat, delimiter=",")
