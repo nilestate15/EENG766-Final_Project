@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import scipy.stats as st
 from gnc import vanloan
+from Scenarios import scenario_1, scenario_1_bias, scenario_2, scenario_3, scenario_4
 
 
 def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
@@ -278,8 +279,9 @@ def RAIM_chi2_global(res):
     test_stat = np.sqrt(res.T.dot(res))
     
     # In aviation systems Pfa is fixed to Pfa is fixed at 1/15000.
-    global_Pfa = 1/15000
-    local_Pfa = .0001
+    # Other papers 3.33e-7
+    global_Pfa = 3.33e-7
+    local_Pfa = .0000007
     b0 = .19
    
     # Method of finding ab equal noncentrality parameter for both global and local test. (allows relation between global test alpha and local test alpha)
@@ -297,7 +299,7 @@ def RAIM_chi2_global(res):
         
     return test_stat, thres, local_Pfa
 
-def local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU):
+def local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx, st_res_max_idx_plt, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU):
     '''
     This function handles the RAIM sequential local test that will sequentially verify each 
     of the observable satellites to detect if there is an actual issue/bias and then 
@@ -329,27 +331,40 @@ def local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, 
     '''
 
     if n != 0:
+        st_res_err = []
+        st_res_err_idx = []
         # Standardize residuals for local test
-        st_res = np.zeros(len(res))
+        st_res_new = np.zeros(len(res))
         # Pull out diagonal of res covariance matrix
         res_cov_diag = np.diagonal(res_cov)
         for i in range(len(res)):
-            st_res[i] = np.abs(res[i]/np.sqrt(res_cov_diag[i]))
+            st_res_new[i] = np.abs(res[i]/np.sqrt(res_cov_diag[i]))
 
-        for k in range(len(st_res)):
-            if st_res[k] < local_thres:
+        for k in range(len(st_res_new)):
+            if st_res_new[k] < local_thres:
                 print(f'Standardized Res {k} ACCEPTABLE')
         
             else:
                 print(f'Standardized Res {k} ERRONEOUS')
-                st_res_err.append(st_res[k])
+                st_res_err.append(st_res_new[k])
+                st_res_err_idx.append(np.where(st_res_new == st_res_err))
     
         st_res_err = np.array(st_res_err)
     
     st_res_max = np.max(st_res_err)
-    st_res_max_idx = np.where(st_res == st_res_max)
-    sat_ENU = np.delete(sat_ENU, st_res_max_idx)
-    sens_meas = np.delete(sens_meas, st_res_max_idx)
+    if n != 0:
+        no_int = st_res_max_idx_plt[n-1]
+        no_int = no_int
+        st_res_copy[no_int] = 0
+        st_res_max_idx = np.argmin(abs(st_res_copy-st_res_max))
+    else:
+        st_res_err_idx = np.where(st_res == st_res_max)  
+        st_res_max_idx = np.where(st_res == st_res_max)   
+        st_res_max_idx = int(st_res_max_idx[0])
+    
+    st_res_max_idx_plt.append(st_res_max_idx)
+    sat_ENU = np.delete(sat_ENU, st_res_err_idx[0], axis=0)
+    sens_meas = np.delete(sens_meas, st_res_err_idx[0])
 
     # Build Measurement Error Covariance Matrix
     rho_error = 2.0
@@ -385,7 +400,7 @@ def local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, 
     # Subtract of recursive local test tracker
     num_st_res_err =- 1
         
-    return sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err
+    return sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err, st_res_err_idx, st_res_max_idx_plt
 
 
 def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
@@ -433,6 +448,7 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User Coords x-axis
     plt.figure()
     plt.title('User coordinates error for x-axis (ENU)')
+    plt.ylim(-7,7)
     plt.plot(timestep, state_error[:,0], label = "Error")
     plt.plot(timestep, up_bound[:,0], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,0], color = 'black', label = "Lower Bound")
@@ -443,6 +459,7 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User Coords y-axis
     plt.figure()
     plt.title('User coordinates error for y-axis (ENU)')
+    plt.ylim(-7,7)
     plt.plot(timestep, state_error[:,2], label = "Error")
     plt.plot(timestep, up_bound[:,2], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,2], color = 'black', label = "Lower Bound")
@@ -453,6 +470,7 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User Coords z-axis
     plt.figure()
     plt.title('User coordinates error for z-axis (ENU)')
+    plt.ylim(-7,7)
     plt.plot(timestep, state_error[:,4], label = "Error")
     plt.plot(timestep, up_bound[:,4], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,4], color = 'black', label = "Lower Bound")
@@ -463,6 +481,7 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User velocity x-axis
     plt.figure()
     plt.title('User Velocity error for x-axis (ENU)')
+    plt.ylim(-7,7)
     plt.plot(timestep, state_error[:,1], label = "Error")
     plt.plot(timestep, up_bound[:,1], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,1], color = 'black', label = "Lower Bound")
@@ -473,6 +492,7 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User velocity y-axis
     plt.figure()
     plt.title('User Velocity error for y-axis (ENU)')
+    plt.ylim(-7,7)
     plt.plot(timestep, state_error[:,3], label = "Error")
     plt.plot(timestep, up_bound[:,3], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,3], color = 'black', label = "Lower Bound")
@@ -483,6 +503,7 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User velocity z-axis
     plt.figure()
     plt.title('User Velocity error for z-axis (ENU)')
+    plt.ylim(-7,7)
     plt.plot(timestep, state_error[:,5], label = "Error")
     plt.plot(timestep, up_bound[:,5], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,5], color = 'black', label = "Lower Bound")
@@ -662,6 +683,23 @@ Pr_std = 0.0
 # Real AC data
 GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot)
 
+# Scenario 1 (Validation Test)
+# GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = scenario_1(num_coords = 1000, Cdt = -0.000410830353*C, Cdt_dot = 0.0)
+# GPS_PR = scenario_1_bias(GPS_PR)
+# GPS_PR = GPS_PR.reshape(len(GPS_PR)*8,1)
+
+# Scenario 2 (Jamming Test 1) using flight data
+# GPS_PR = scenario_2(GPS_PR)
+# GPS_PR = GPS_PR.reshape(len(GPS_PR)*8,1)
+
+# Scenario 3 (Jamming Test 2) using flight data
+# GPS_PR = scenario_3(GPS_PR)
+# GPS_PR = GPS_PR.reshape(len(GPS_PR)*8,1)
+
+# Scenario 4 (Bias Test 1) using flight data
+GPS_PR = scenario_4(GPS_PR)
+GPS_PR = GPS_PR.reshape(len(GPS_PR)*8,1)
+
 # Add in accceleration for initial state
 acc0 = np.array([0.,0.,0.])
 AC_x0 = np.insert(AC_x0, (2,4,6), (acc0[0], acc0[1], acc0[2]))
@@ -705,6 +743,9 @@ pred_meas_mat = []
 NEES_cov_mat = np.zeros((num_coords, 3, 3))
 # mean_res = np.zeros((len(num_coords)))
 
+st_res_max_idx_plt = []
+st_res_err_idx = []
+
 for i in range(num_coords):
     # Pulling one per time step
     sens_meas = GPS_PR[i*8:i*8+8,:].flatten() 
@@ -718,7 +759,7 @@ for i in range(num_coords):
     
     if nan_meas.all() == True:
         print(f'Timestep: {i}')
-        print(f'All Satellite info is unnavailable')
+        print(f'NO SATELLITES AVAILABLE')
         print('\n')
 
         # EKF
@@ -727,64 +768,73 @@ for i in range(num_coords):
 
     elif nan_meas.any() == True and nan_meas.all() == False:
         print(f'Timestep: {i}')
-        print(f'Satellite {idx_nan_meas} info is unnavailable')
-        print('\n')
+        print(f'SATELLITE {idx_nan_meas} UNAVAILABLE')
         sens_meas = np.delete(sens_meas, idx_nan_meas)
         sat_ENU = np.delete(sat_ENU, idx_nan_meas, axis=0)
 
-        # EKF
-        curr_x, curr_P, K, H, res, res_cov, st_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
-
-        # RAIM chi2 global statistic check
-        test_stat, thres, local_Pfa = RAIM_chi2_global(res)
-
-        # Check if test statistic is within chi squared model for test statistic
-        if test_stat < thres:
-            print(f'GLOBAL TEST SUCCESS')
+        if len(sens_meas) < 5:
+            print(f'NO NAVIGATIONAL INTEGRITY')
             print('\n')
-            
+
+            # EKF
+            curr_x, curr_P, K, H, res, res_cov, st_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
         else:
-            print(f'GLOBAL TEST FAILURE')
-            print(f'Coordinate Point {i} Integrity Failure')
-            print('\n')
+            # EKF
+            curr_x, curr_P, K, H, res, res_cov, st_res, pred_meas  = EKF(sat_ENU, sens_meas, dt, curr_x, curr_P)
 
-            print(f'LOCAL TEST:')
-            # Timestep when bias was caught
-            bias_catch_ts = i
-
-            local_thres = st.norm.ppf(q=1-(local_Pfa/2))
-            st_res_err = []
-            num_st_res_err = 0
-
-            for k in range(len(st_res)):
-                if st_res[k] < local_thres:
-                    print(f'Standardized Res {k} ACCEPTABLE')
-            
-                else:
-                    print(f'Standardized Res {k} ERRONEOUS')
-                    st_res_err.append(st_res[k])
-                    num_st_res_err += 1
-
-            st_res_err = np.array(st_res_err)
-            is_empty = st_res_err.size == 0
-
-            if is_empty == False:
-                print(f'RECURSIVE LOCAL TEST:')
-                for n in range(num_st_res_err):
-                    sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err = local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
-
-            # Rerun Global Test for final verification
+            # RAIM chi2 global statistic check
             test_stat, thres, local_Pfa = RAIM_chi2_global(res)
 
             # Check if test statistic is within chi squared model for test statistic
-            print('FINAL GLOBAL TEST:')
             if test_stat < thres:
-                print(f'Position Estimate {i} ACCEPTABLE')
+                print(f'GLOBAL TEST SUCCESS')
                 print('\n')
                 
             else:
-                print(f'Position Estimate {i} NOT RELIABLE')
+                print(f'GLOBAL TEST FAILURE')
+                print(f'Coordinate Point {i} Integrity Failure')
                 print('\n')
+
+                print(f'LOCAL TEST:')
+                # Timestep when bias was caught
+                bias_catch_ts = i
+
+                local_thres = st.norm.ppf(q=1-(local_Pfa/2))
+                st_res_err = []
+                st_res_max_idx_plt = []
+                st_res_err_idx = []
+                num_st_res_err = 0
+
+                for k in range(len(st_res)):
+                    if st_res[k] < local_thres:
+                        print(f'Standardized Res {k} ACCEPTABLE')
+                
+                    else:
+                        print(f'Standardized Res {k} ERRONEOUS')
+                        st_res_err.append(st_res[k])
+                        st_res_err_idx.append(np.where(st_res == st_res[k]))
+                        num_st_res_err += 1
+
+                st_res_err = np.array(st_res_err)
+                is_empty = st_res_err.size == 0
+
+                if is_empty == False:
+                    print(f'RECURSIVE LOCAL TEST:')
+                    for n in range(num_st_res_err):
+                        sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err, st_res_err_idx, st_res_max_idx_plt = local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx, st_res_max_idx_plt, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
+
+                # Rerun Global Test for final verification
+                test_stat, thres, local_Pfa = RAIM_chi2_global(res)
+
+                # Check if test statistic is within chi squared model for test statistic
+                print('FINAL GLOBAL TEST:')
+                if test_stat < thres:
+                    print(f'Position Estimate {i} ACCEPTABLE')
+                    print('\n')
+                    
+                else:
+                    print(f'Position Estimate {i} NOT RELIABLE')
+                    print('\n')
 
         # Update state and covariance
         curr_x = curr_x + K.dot(res)
@@ -796,11 +846,27 @@ for i in range(num_coords):
         # # Store for plotting
         res_mat.append(res)
 
+        # Put in zero where satellite was removed for plotting
+        st_res_max_idx_plt = np.array(st_res_max_idx_plt)
+        st_res_err_idx_plt_empty = st_res_max_idx_plt.size == 0
+        if st_res_err_idx_plt_empty == False:
+            srt_idx = np.zeros(len(st_res_max_idx_plt))
+            for l in range(len(st_res_max_idx_plt)):
+                curr_idx = st_res_max_idx_plt[l]
+                srt_idx[l] = curr_idx 
+            srt_idx = srt_idx.astype(int)  
+            srt_st_res_max_idx_plt = np.sort(srt_idx)
+            for z in range(len(srt_st_res_max_idx_plt)):
+                srt_curr_idx = srt_st_res_max_idx_plt[z]
+                res = np.insert(res, srt_curr_idx, 0)
+
         # Add in zero where naan data was for plotting nan dropout in plot
         nan_arr = idx_nan_meas[0]
         for cnt in range(len(nan_arr)):
             res = np.insert(res, nan_arr[cnt], 0)
+        
         SV_res_mat[i] = res
+        st_res_err_idx_plt = []
 
         sens_meas_mat.append(sens_meas)
         pred_meas_mat.append(pred_meas)
@@ -842,7 +908,9 @@ for i in range(num_coords):
 
             local_thres = st.norm.ppf(q=1-(local_Pfa/2))
             st_res_err = []
+            st_res_max_idx_plt = []
             num_st_res_err = 0
+            st_res_copy = st_res
 
             for k in range(len(st_res)):
                 if st_res[k] < local_thres:
@@ -853,13 +921,14 @@ for i in range(num_coords):
                     st_res_err.append(st_res[k])
                     num_st_res_err += 1
 
+
             st_res_err = np.array(st_res_err)
             is_empty = st_res_err.size == 0
 
             if is_empty == False:
                 print(f'RECURSIVE LOCAL TEST:')
                 for n in range(num_st_res_err):
-                    sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err = local_seq_test(res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
+                    sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err, st_res_err_idx, st_res_max_idx_plt = local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx, st_res_max_idx_plt, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU)
 
             # Rerun Global Test for final verification
             test_stat, thres, local_Pfa = RAIM_chi2_global(res)
@@ -883,7 +952,24 @@ for i in range(num_coords):
         
         # # Store for plotting
         res_mat.append(res)
+        # Put in zero where satellite was removed for plotting
+        st_res_max_idx_plt = np.array(st_res_max_idx_plt)
+        st_res_err_idx_plt_empty = st_res_max_idx_plt.size == 0
+        if st_res_err_idx_plt_empty == False:
+            srt_idx = np.zeros(len(st_res_max_idx_plt))
+            for l in range(len(st_res_max_idx_plt)):
+                curr_idx = st_res_max_idx_plt[l]
+                srt_idx[l] = curr_idx 
+            srt_idx = srt_idx.astype(int)  
+            srt_st_res_max_idx_plt = np.sort(srt_idx)
+            for z in range(len(srt_st_res_max_idx_plt)):
+                srt_curr_idx = srt_st_res_max_idx_plt[z]
+                res = np.insert(res, srt_curr_idx, 0)
+        
+        print('done')
         SV_res_mat[i] = res
+        st_res_err_idx_plt = []
+        st_res_max_idx_plt = []
 
         sens_meas_mat.append(sens_meas)
         pred_meas_mat.append(pred_meas)
