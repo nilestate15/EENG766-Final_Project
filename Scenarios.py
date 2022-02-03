@@ -3,15 +3,15 @@ import pymap3d as pm
 
 
 
-def scenario_1(num_coords, Cdt, Cdt_dot):
+def scenario_1(Cdt, Cdt_dot):
     '''
-    This function is used to generate simulated data of satellite location, receiver state, and pseudorange measurements
+    This function uses simulated data of satellite location, receiver state, and pseudorange measurements
     to be used in "RBRAIM_flightdata_Model2.py" (meaning the structure of the data will be made to be run in this file)
-    Stationary satellite data pulled in on 22 Jan 2022 19:44:07 (EST)
+    Stationary satellite data pulled in on 22 Jan 2022 19:44:07 (EST) and added random velocity to moving
 
     Args:
-    num_SVs: a integer representing the number of satellites to be used when creating data
-    origin: a (3,) array of the starting position of the receiver
+    Cdt: The clock bias between the satellite clock and aircraft receiver clock (Used in creating truth state)
+    Cdt_dot: The clock drift/rate of change in the clock bias (Used in creating truth state)
 
     Returns: 
     PR: A (# of timesteps, # of satellites) array of the psuedoranges from each satellite for each timestep (array excludes initial pseudoranges).
@@ -22,12 +22,28 @@ def scenario_1(num_coords, Cdt, Cdt_dot):
     AC_x0: A (# of states,) array of the initial state of the aircraft receiver.
     truth_table: A (# of timesteps, # of states) array of the state of the aircraft for each timestep. (array exclude initial aircraft state) 
     '''
-    # Difference in time between data
-    dt = 1.0
-    # Matrix of dts for each coordinate
-    dt_arr = np.ones(num_coords)*dt
     # Measurement noise
     rho_error = 2.0
+
+    # Load in simulated data
+    sim_data = np.load('./enu_data.npz')
+
+    # Timestamp of each data point
+    sim_timestamp = sim_data['arr_0']
+    # Difference in time between data
+    sim_dt = np.zeros(len(sim_timestamp))
+    for cnt, timestamp in enumerate(sim_timestamp[1:]):
+        sim_dt[cnt] = timestamp - sim_timestamp[cnt]
+    # Remove last dt to make the correct time step
+    sim_dt = sim_dt[:-1]
+
+    # Aircraft receiver enu positions
+    sim_AC_enu = sim_data['arr_1']
+
+    # Aircraft receiver enu velocities
+    sim_AC_vel = sim_data['arr_2']
+
+    num_coords = len(sim_dt)
 
     # Center fixed point Geodetic (degrees) Beavercreek, OH
     geo_cfp = np.array([39.71, -84.06, 267])
@@ -60,62 +76,49 @@ def scenario_1(num_coords, Cdt, Cdt_dot):
     GPS_pos_mat = np.zeros((len(GPS_pos0)*num_coords, 3))
     curr_GPS = GPS_pos0
     for k in range(num_coords): 
-        curr_vel_E = rand_vel.normal(136.09, 0.5, len(GPS_pos0))
-        curr_vel_N = rand_vel.normal(-110.57, 0.5, len(GPS_pos0))
-        curr_vel_U = rand_vel.normal(-120.23, 0.5, len(GPS_pos0))
+        curr_vel_E = rand_vel.normal(136.09, 1.0, len(GPS_pos0))
+        curr_vel_N = rand_vel.normal(-110.57, 1.0, len(GPS_pos0))
+        curr_vel_U = rand_vel.normal(-120.23, 1.0, len(GPS_pos0))
         curr_GPS_vel = np.vstack((curr_vel_E,curr_vel_N,curr_vel_U)).T
         curr_GPS = curr_GPS + curr_GPS_vel
         GPS_pos_mat[k*len(GPS_pos0):k*len(GPS_pos0)+len(GPS_pos0),:] = curr_GPS
         
 
-    ## Make State Matrix
-    # Make varying velocity for state (m/s)
-    AC_vel0 = np.array([0,0,0])
-    AC_vel_E = rand_vel.normal(2.0, 0.5, num_coords)
-    AC_vel_N = rand_vel.normal(-3.5, 0.5, num_coords)
-    AC_vel_U = rand_vel.normal(1.5, 0.5, num_coords)
-    AC_vel = np.vstack((AC_vel_E,AC_vel_N,AC_vel_U)).T
-
-    # Make AC position matrix 
-    AC_pos0 = enu_cfp
-    AC_pos_mat = np.zeros((num_coords, 3))
-    curr_AC = AC_pos0
-    for n in range(num_coords):
-        curr_AC_vel = AC_vel[n,:]
-        curr_AC = curr_AC + curr_AC_vel
-        AC_pos_mat[n,:] = curr_AC
-        
-
+    ## Make State Matrix    
     # Initial State
-    AC_x0 = [AC_pos0[0], AC_vel0[0], AC_pos0[1], AC_vel0[1], AC_pos0[2], AC_vel0[2], Cdt, Cdt_dot]
+    AC_x0 = [sim_AC_enu[0,0], sim_AC_vel[0,0], sim_AC_enu[0,1], sim_AC_vel[0,1], sim_AC_enu[0,2], sim_AC_vel[0,2], Cdt, Cdt_dot]
+
+    # Remove Initial State from position and velocity
+    sim_AC_enu = sim_AC_enu[1:,:]
+    sim_AC_vel = sim_AC_vel[1:,:]
 
     # Make state matrix
-    truth_table = np.zeros((len(AC_pos_mat), 8))
+    truth_table = np.zeros((len(sim_AC_enu), 8))
     for i in range(len(truth_table)):
-        truth_table[i, :] = [AC_pos_mat[i,0], AC_vel[i,0], AC_pos_mat[i,1], AC_vel[i,1], AC_pos_mat[i,2], AC_vel[i,2], Cdt, Cdt_dot]
+        truth_table[i, :] = [sim_AC_enu[i,0], sim_AC_vel[i,0], sim_AC_enu[i,1], sim_AC_vel[i,1], sim_AC_enu[i,2], sim_AC_vel[i,2], Cdt, Cdt_dot]
 
     # Make Pseudorange Measurements
     # Predicted Pseudorange Measurement (h(x) formula)
-    PR = np.zeros((num_coords,8))
+    PR = np.zeros((len(truth_table),8))
     # White noise for sensor pseudorange measurements
     white_noise = np.random.default_rng()
 
     PR0 = np.zeros(8)
     for int, sat_pos0 in enumerate(GPS_pos0):
-        PR0[int] = np.sqrt((sat_pos0[0] - AC_x0[0])**2 + (sat_pos0[1] - AC_x0[2])**2 + (sat_pos0[2] - AC_x0[4])**2) + Cdt + white_noise.normal(0.0, 2, 1)
+        PR0[int] = np.sqrt((sat_pos0[0] - AC_x0[0])**2 + (sat_pos0[1] - AC_x0[2])**2 + (sat_pos0[2] - AC_x0[4])**2) + Cdt + white_noise.normal(0.0, rho_error, 1)
 
-    for l in range(num_coords):
+    for l in range(len(truth_table)):
         GPS_pos = GPS_pos_mat[l*8:l*8+8,:]
         truth = truth_table[l]
         for m, sat_pos in enumerate(GPS_pos):
-            PR[l,m] = np.sqrt((sat_pos[0] - truth[0])**2 + (sat_pos[1] - truth[2])**2 + (sat_pos[2] - truth[4])**2) + Cdt + white_noise.normal(0.0, 2, 1)
+            PR[l,m] = np.sqrt((sat_pos[0] - truth[0])**2 + (sat_pos[1] - truth[2])**2 + (sat_pos[2] - truth[4])**2) + Cdt + white_noise.normal(0.0, rho_error, 1)
 
-    return PR, PR0, GPS_pos0, GPS_pos_mat, dt_arr, AC_x0, truth_table 
+    return PR, PR0, GPS_pos0, GPS_pos_mat, sim_dt, AC_x0, truth_table 
 
 def scenario_1_bias(PR):
     '''
     This function takes in the simulated data from scenario 1 and adds a bias to two satellites.
-    Set to adding bias on satellite 0 at 200 secs and satellite 2 at 400 secs.
+    Set to adding bias on satellite 0 at 100 secs and satellite 1 at 200 secs.
 
     Args:
     PR: A (# of timesteps, # of satellites) array of the psuedoranges before bias from each satellite for each timestep (array excludes initial pseudoranges).
@@ -127,13 +130,13 @@ def scenario_1_bias(PR):
     # How many satellites to be biased
     num_sats = 2
     # Add random bias to satellite for anomaly (m)
-    sat_bias = 70
+    sat_bias = 50
     # How many secs/meas you want to add random bias to
-    num_bias = 10
+    num_bias = 20
     # List of which satellite to bias
     bias_sat_arr = np.array([0, 1])
     # List of when to bias satellite
-    bias_sec_arr = np.array([200, 400])
+    bias_sec_arr = np.array([100, 200])
 
     for i in range(num_sats):
         bias_sat = bias_sat_arr[i]
@@ -144,7 +147,7 @@ def scenario_1_bias(PR):
         print(f'Satellite w/ anomally: {bias_sat}')
         print(f'Where the anomally starts in timestep: {bias_sec}')
 
-    return PR
+    return PR, bias_sec_arr
 
 def scenario_2(PR):
     '''
@@ -175,11 +178,11 @@ def scenario_2(PR):
         print(f'Satellite jammed: {jam_sat}')
         print(f'Where the jamming starts in timestep: {jam_sec}')
 
-    return PR
+    return PR, jam_sec_arr
 
 def scenario_3(PR):
     '''
-    This function takes in the the flight data from RBRAIM_flightdata_Model2 simultaneously jams 4 satellites.
+    This function takes in the the flight data from RBRAIM_flightdata_Model2 jams 4 satellites.
     Set to jamming on satellites 0, 2, 4, and 6 starting at 200 and jamming the others at a 200s interval.
 
     Args:
@@ -193,9 +196,9 @@ def scenario_3(PR):
     # How many satellites to be jammed
     num_sats = 4
     # List of which satellite to be jammed
-    jam_sat_arr = np.array([0, 2, 4, 6])
+    jam_sat_arr = np.array([4, 6, 7, 2])
     # List of when to jam satellite
-    jam_sec_arr = np.array([200, 400, 800, 1000])
+    jam_sec_arr = np.array([400, 600, 800, 1000])
 
     for i in range(num_sats):
         jam_sat = jam_sat_arr[i]
@@ -206,11 +209,11 @@ def scenario_3(PR):
         print(f'Satellite jammed: {jam_sat}')
         print(f'Where the jamming starts in timestep: {jam_sec}')
 
-    return PR
+    return PR, jam_sec_arr
 
 def scenario_4(PR):
     '''
-    This function takes in the the flight data from RBRAIM_flightdata_Model2 simultaneously biasing two satellites.
+    This function takes in the the flight data from RBRAIM_flightdata_Model2 simultaneously biasing 4 satellites.
     Set to biasing satellites 2 and 6 at 800 secs.
 
     Args:
@@ -224,13 +227,13 @@ def scenario_4(PR):
     # How many satellites to be jammed
     num_sats = 2
     # Add random bias to satellite for anomaly (m)
-    sat_bias = 70
+    sat_bias = 50
     # How many secs/meas you want to add random bias to
     num_bias = 150
     # List of which satellite to be jammed
     bias_sat_arr = np.array([1, 5])
     # List of when to jam satellite
-    bias_sec_arr = np.array([800, 800])
+    bias_sec_arr = np.array([600, 600])
 
     for i in range(num_sats):
         bias_sat = bias_sat_arr[i]
@@ -242,5 +245,42 @@ def scenario_4(PR):
         print(f'Satellite biased: {bias_sat}')
         print(f'Where the bias starts in timestep: {bias_sec}')
 
-    return PR
+    return PR, bias_sec_arr
 
+def scenario_5(PR):
+    '''
+    This function takes in the the flight data from RBRAIM_flightdata_Model2 simultaneously biasing two satellites.
+    Set to biasing satellites 0, 1, 3, & 5 starting at 300s with a ramp bias starting at 10 and adding 10 each timestep for 100s.
+    Once 100s ends, stop biasing current satellite and start biasing next with the same ramp bias as previous.
+    Bias should start at 10 and end at 1000
+
+    Args:
+    PR: A (# of timesteps, # of satellites) array of the psuedoranges before bias from each satellite for each timestep (array excludes initial pseudoranges).
+
+    Returns:
+    PR: A (# of timesteps, # of satellites) array of the psuedoranges after bias from each satellite for each timestep (array excludes initial pseudoranges).
+    '''
+    # Reshape Array
+    PR = PR.reshape(int(len(PR)/8),8)
+    # How many satellites to be jammed
+    num_sats = 4
+    # How many secs/meas you want to add random bias to
+    num_bias = 100
+    # Add random bias to satellite for anomaly (m)
+    sat_bias = np.linspace(10,1000,num_bias).astype(int)
+    # List of which satellite to be jammed
+    bias_sat_arr = np.array([0,1,3,5])
+    # List of when to jam satellite
+    bias_sec_arr = np.array([300,400,500,600])
+
+    for i in range(num_sats):
+        bias_sat = bias_sat_arr[i]
+        bias_sec = bias_sec_arr[i]
+        PR[bias_sec:bias_sec+num_bias,bias_sat] = PR[bias_sec:bias_sec+num_bias,bias_sat] + sat_bias
+
+
+        # Print where the anomally will be
+        print(f'Satellite biased: {bias_sat}')
+        print(f'Where the bias starts in timestep: {bias_sec}')
+
+    return PR, bias_sec_arr

@@ -2,10 +2,11 @@ import numpy as np
 import scipy.linalg as la
 from math import sin, cos
 import matplotlib.pyplot as plt
+import matplotlib.axis as ax
 import pandas as pd
 import scipy.stats as st
 from gnc import vanloan
-from Scenarios import scenario_1, scenario_1_bias, scenario_2, scenario_3, scenario_4
+from Scenarios import scenario_1, scenario_1_bias, scenario_2, scenario_3, scenario_4, scenario_5
 
 
 def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
@@ -20,7 +21,7 @@ def gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot):
     Cdt: The clock bias between the satellite clock and aircraft receiver clock (Used in creating truth state)
     Cdt_dot: The clock drift/rate of change in the clock bias (Used in creating truth state)
 
-    Returns: , GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table
+    Returns: 
     GPS_PR: A (# of Satellites * # of timesteps, 1) array of the psuedoranges from each satellite for each timestep (array excludes initial pseudoranges).
     GPS_PR_0: A (# of Satellites, 1) array of the initial pseudorange of each satellite. 
     GPS_pos_0: A (# of Satellites, 3) array of the initial position of each satellite.
@@ -197,10 +198,6 @@ def EKF(sat_ENU, sens_meas, dt, curr_x, curr_P):
                     [0.,0.,(-1/accelbias_tau)]])
 
 
-    # Influence of clock bias and clock drift on state
-    # F_cb = np.array([[(-1/clockbias_tau),0], 
-    #                 [0.,0]])
-
     F_cb = np.array([[0,1.],
                     [0,(-1/clockbias_tau)]])
 
@@ -280,11 +277,12 @@ def RAIM_chi2_global(res):
     
     # In aviation systems Pfa is fixed to Pfa is fixed at 1/15000.
     # Other papers 3.33e-7
-    global_Pfa = 3.33e-7
-    local_Pfa = .0000007
+    global_Pfa = 1/85000
+    local_Pfa = .0000193
     b0 = .19
    
-    # Method of finding ab equal noncentrality parameter for both global and local test. (allows relation between global test alpha and local test alpha)
+    # Method of finding an equal noncentrality parameter for both global and local test. (allows relation between global test alpha and local test alpha)
+    # When thres_b ~= thres_a then local Pfa and global Pfa have the same noncentrality parameter
     # GNSS Signal Reliability Testing in Urban and Indoor Environments Heidi Kuusniemi*, Gérard Lachapelle
     n1alp = st.norm.ppf(q=1-(local_Pfa/2))
     n1bet = st.norm.ppf(q=1-b0)
@@ -294,7 +292,7 @@ def RAIM_chi2_global(res):
     
 
     # GPS RAIM: Statistics Based Improvement on the Calculation of Threshold and Horizontal Protection Radius Jiaxing Liu, Mingquan Lu, Zhenming Feng
-    # Find inverse chi squared for threshold (normalized chi2 threshold w/ num of satellites - 4 degrees of freedom [pos and clock bias])
+    # Find percent point function of chi squared for threshold (normalized chi2 threshold w/ num of satellites - 4 degrees of freedom [pos and clock bias])
     thres = st.chi2.ppf(q = 1-global_Pfa, df= 4)
         
     return test_stat, thres, local_Pfa
@@ -308,11 +306,14 @@ def local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx
     to be used when updating the current state and state error covariance.Based on 
     "GNSS Signal Reliability Testing in Urban and Indoor Environments" Model "FDE A". 
 
-    Args: res, res_cov, st_res, st_res_err, num_st_res_err, n, curr_x, curr_P, sens_meas, sat_ENU
+    Args: 
         res: an (# of satellites,) array of the residuals of the pseudorange measurements for each satellite
         res_cov: an (# of satellites, # of satellites) array of the residual error covariance matrix
         st_res: an (# of satellites,) array of standardized residuals.
+        st_res_copy: an (# of satellite,) array to keep track of where the error is in the "first flagged" standardized residuals for plotting
         st_res_err: an array of the standardized residuals that are suspected to be erroneous
+        st_res_err_idx: an array to help keep track of where the previous timestep std residual array is for removal of sat and measurement in nav solution
+        st_res_max_idx_plt: an array to keep track of where to put zeros for the removal of satellite in when plotting the residual plot
         num_st_res_err: a count of how many standardized residuals that are suspected to be erroneous (helps keep track of how many times the test should be run)
         n: the variable used to keep track of if this is the first time the sequential test has been run
         curr_x: an (8,) array of the users current state
@@ -320,7 +321,7 @@ def local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx
         sens_meas: an (num sat,) array of actual psuedorange measurements of each satellite of the current timestep
         sat_ENU: an (num sat,3) array of ENU coordinates of satellites of the current timestep
         
-    Returns: sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err
+    Returns: 
         sens_meas: an (num sat,) array of actual psuedorange measurements of each satellite of the current timestep (updated after dropped satellite)
         sat_ENU: an (num sat,3) array of ENU coordinates of satellites of the current timestep (updated after dropped satellite)
         H: an (# of satellites, # of states) array of the (H matrix) measurement matrix (updated after dropped satellite)
@@ -328,12 +329,16 @@ def local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx
         res: an (# of satellites,) array of the residuals of the pseudorange measurements for each satellite (updated after dropped satellite)
         K: an (# of states, # of satellites) array of the Kalman Gain (updated after dropped satellite)
         num_st_res_err: a count of how many standardized residuals that are suspected to be erroneous (helps keep track of how many times the test should be run)
+        st_res_err_idx: an array to help keep track of where the previous timestep std residual array is for removal of sat and measurement in nav solution
+        st_res_max_idx_plt: an array to keep track of where to put zeros for the removal of satellite in when plotting the residual plot
     '''
-
+    # Helps keeps plotting the residuals (showing the nonusage of satellites) over the iterations
     if n != 0:
+        # standardized residual array used to find the error (old)
         st_res_err = []
+        # standardized residual array index of where the error is (old)
         st_res_err_idx = []
-        # Standardize residuals for local test
+        # Standardize residuals for local test (new set of std res array with original std residual error removed)
         st_res_new = np.zeros(len(res))
         # Pull out diagonal of res covariance matrix
         res_cov_diag = np.diagonal(res_cov)
@@ -346,11 +351,14 @@ def local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx
         
             else:
                 print(f'Standardized Res {k} ERRONEOUS')
+                # Put new std residual error into old 
                 st_res_err.append(st_res_new[k])
+                # Where the the new residual error is located compared to where it's located in old matrix. (for removing satellite and pseudorange measurements from nav solution)
                 st_res_err_idx.append(np.where(st_res_new == st_res_err))
     
         st_res_err = np.array(st_res_err)
-    
+
+    # Find position of std res error in comparison to original matrix to plot properly 
     st_res_max = np.max(st_res_err)
     if n != 0:
         no_int = st_res_max_idx_plt[n-1]
@@ -362,6 +370,7 @@ def local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx
         st_res_max_idx = np.where(st_res == st_res_max)   
         st_res_max_idx = int(st_res_max_idx[0])
     
+    # Remove biased satellite/measurement from nav solution
     st_res_max_idx_plt.append(st_res_max_idx)
     sat_ENU = np.delete(sat_ENU, st_res_err_idx[0], axis=0)
     sens_meas = np.delete(sens_meas, st_res_err_idx[0])
@@ -403,7 +412,7 @@ def local_seq_test(res, res_cov, st_res, st_res_copy, st_res_err, st_res_err_idx
     return sens_meas, sat_ENU, H, pred_meas, res, K, num_st_res_err, st_res_err_idx, st_res_max_idx_plt
 
 
-def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
+def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, bias_sec_arr):
     '''
     This function plots the state error between the true state and the estimated state of the 
     position and velocity for the x,y, and z axis.  The sigma bounds of the covariance is also
@@ -415,6 +424,7 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     est_state_mat: A (# of timesteps, # of states) array of the estimated state of the aircraft for each timestep
     cov_bounds: A (# of timesteps, # of states) array of the standard covariance. (Used to create upper and lower sigma bounds)
     AC_dt: A (# of timesteps,) array of the difference in time between each data point timestamp. (Used to create a timestep for plots) 
+    bias_sec_arr: an array showing where timestep wise the bias starts
 
     Returns:
     state_error: A (# of timesteps, # of states) array of the difference between the truth and predicted states for each timestep
@@ -445,71 +455,85 @@ def plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt):
     # Find error between states
     state_error = truth_table - est_state_mat
 
+    # Mean of errors
+    xpos_mean = round(np.mean(state_error[:,0]), 3)
+    ypos_mean = round(np.mean(state_error[:,2]), 3)
+    zpos_mean = round(np.mean(state_error[:,4]), 3)
+
     # Plotting Truth vs Predicted User Coords x-axis
     plt.figure()
-    plt.title('User coordinates error for x-axis (ENU)')
-    plt.ylim(-7,7)
+    plt.title('RBRAIM User coordinates error for x-axis (ENU)')
+    plt.ylim(-10,10)
     plt.plot(timestep, state_error[:,0], label = "Error")
-    plt.plot(timestep, up_bound[:,0], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,0], color = 'black', label = "Lower Bound")
+    plt.plot(timestep, up_bound[:,0], color = 'black', label = "2σ Upper Bound")
+    plt.plot(timestep, lw_bound[:,0], color = 'black', label = "2σ Lower Bound")
+    plt.vlines(x=bias_sec_arr, ymin=-10, ymax=10, colors='r', ls='--', label=f'Bias Starts')
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords Error x-axis (m)')
+    plt.text(0.9, 0.1, f"μ = {xpos_mean}", fontsize = 12, ha = 'center', transform=plt.gca().transAxes,
+         bbox = dict(facecolor = 'red', alpha = 0.5))
     plt.legend()
 
     # Plotting Truth vs Predicted User Coords y-axis
     plt.figure()
-    plt.title('User coordinates error for y-axis (ENU)')
-    plt.ylim(-7,7)
+    plt.title('RBRAIM User coordinates error for y-axis (ENU)')
+    plt.ylim(-10,10)
     plt.plot(timestep, state_error[:,2], label = "Error")
-    plt.plot(timestep, up_bound[:,2], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,2], color = 'black', label = "Lower Bound")
+    plt.plot(timestep, up_bound[:,2], color = 'black', label = "2σ Upper Bound")
+    plt.plot(timestep, lw_bound[:,2], color = 'black', label = "2σ Lower Bound")
+    plt.vlines(x=bias_sec_arr, ymin=-10, ymax=10, colors='r', ls='--', label=f'Bias Starts')
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords Error y-axis (m)')
+    plt.text(0.9, 0.1, f"μ = {ypos_mean}", fontsize = 12, ha = 'center', transform=plt.gca().transAxes,
+         bbox = dict(facecolor = 'red', alpha = 0.5))
     plt.legend()
 
     # Plotting Truth vs Predicted User Coords z-axis
     plt.figure()
-    plt.title('User coordinates error for z-axis (ENU)')
-    plt.ylim(-7,7)
+    plt.title('RBRAIM User coordinates error for z-axis (ENU)')
+    plt.ylim(-10,10)
     plt.plot(timestep, state_error[:,4], label = "Error")
-    plt.plot(timestep, up_bound[:,4], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,4], color = 'black', label = "Lower Bound")
+    plt.plot(timestep, up_bound[:,4], color = 'black', label = "2σ Upper Bound")
+    plt.plot(timestep, lw_bound[:,4], color = 'black', label = "2σ Lower Bound")
+    plt.vlines(x=bias_sec_arr, ymin=-10, ymax=10, colors='r', ls='--', label=f'Bias Starts')
     plt.xlabel('Time (secs)')
     plt.ylabel('User Coords Error z-axis (m)')
+    plt.text(0.9, 0.1, f"μ = {zpos_mean}", fontsize = 12, ha = 'center', transform=plt.gca().transAxes,
+         bbox = dict(facecolor = 'red', alpha = 0.5))
     plt.legend()
 
-    # Plotting Truth vs Predicted User velocity x-axis
-    plt.figure()
-    plt.title('User Velocity error for x-axis (ENU)')
-    plt.ylim(-7,7)
-    plt.plot(timestep, state_error[:,1], label = "Error")
-    plt.plot(timestep, up_bound[:,1], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,1], color = 'black', label = "Lower Bound")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Velocity Error x-axis (m/s)')
-    plt.legend()
+    # # Plotting Truth vs Predicted User velocity x-axis
+    # plt.figure()
+    # plt.title('User Velocity error for x-axis (ENU)')
+    # plt.ylim(-7,7)
+    # plt.plot(timestep, state_error[:,1], label = "Error")
+    # plt.plot(timestep, up_bound[:,1], color = 'black', label = "Upper Bound")
+    # plt.plot(timestep, lw_bound[:,1], color = 'black', label = "Lower Bound")
+    # plt.xlabel('Time (secs)')
+    # plt.ylabel('User Velocity Error x-axis (m/s)')
+    # plt.legend()
 
-    # Plotting Truth vs Predicted User velocity y-axis
-    plt.figure()
-    plt.title('User Velocity error for y-axis (ENU)')
-    plt.ylim(-7,7)
-    plt.plot(timestep, state_error[:,3], label = "Error")
-    plt.plot(timestep, up_bound[:,3], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,3], color = 'black', label = "Lower Bound")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Velocity Error y-axis (m/s)')
-    plt.legend()
+    # # Plotting Truth vs Predicted User velocity y-axis
+    # plt.figure()
+    # plt.title('User Velocity error for y-axis (ENU)')
+    # plt.ylim(-7,7)
+    # plt.plot(timestep, state_error[:,3], label = "Error")
+    # plt.plot(timestep, up_bound[:,3], color = 'black', label = "Upper Bound")
+    # plt.plot(timestep, lw_bound[:,3], color = 'black', label = "Lower Bound")
+    # plt.xlabel('Time (secs)')
+    # plt.ylabel('User Velocity Error y-axis (m/s)')
+    # plt.legend()
 
-    # Plotting Truth vs Predicted User velocity z-axis
-    plt.figure()
-    plt.title('User Velocity error for z-axis (ENU)')
-    plt.ylim(-7,7)
-    plt.plot(timestep, state_error[:,5], label = "Error")
-    plt.plot(timestep, up_bound[:,5], color = 'black', label = "Upper Bound")
-    plt.plot(timestep, lw_bound[:,5], color = 'black', label = "Lower Bound")
-    plt.xlabel('Time (secs)')
-    plt.ylabel('User Velocity Error z-axis (m/s)')
-    plt.legend()
+    # # Plotting Truth vs Predicted User velocity z-axis
+    # plt.figure()
+    # plt.title('User Velocity error for z-axis (ENU)')
+    # plt.ylim(-7,7)
+    # plt.plot(timestep, state_error[:,5], label = "Error")
+    # plt.plot(timestep, up_bound[:,5], color = 'black', label = "Upper Bound")
+    # plt.plot(timestep, lw_bound[:,5], color = 'black', label = "Lower Bound")
+    # plt.xlabel('Time (secs)')
+    # plt.ylabel('User Velocity Error z-axis (m/s)')
+    # plt.legend()
     
     plt.show()
     return state_error
@@ -528,7 +552,7 @@ def plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt):
     AC_dt: A (# of timesteps,) array of the difference in time between each data point timestamp. (Used to create a timestep for plots) 
 
     Returns:
-    Nothing
+    NEES_st_err: an (# timesteps, 3) array showing the state position error 
     '''
     # Make timestep for plot
     timestep = np.zeros(num_coords)
@@ -551,19 +575,76 @@ def plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt):
     # Line of stability for filter
     stab_line = np.ones(num_coords)*3
 
-    mean_NEES = np.mean(NEES_mat)
+    ANEES = round(np.mean(NEES_mat),3)
 
     # Plotting Truth vs Predicted User Coords x-axis
+    # plt.figure()
+    # plt.title('NEES of RBRAIM')
+    # plt.plot(timestep, NEES_mat, label = "NEES")
+    # plt.plot(timestep, stab_line, label = "Stability")
+    # plt.xlabel('Time (secs)')
+    # plt.ylabel('NEES')
+    # # Adding ANEES inside a rectangular box
+    # plt.text(0.9, 0.8, f"ANEES = {ANEES}", fontsize = 12, ha = 'center', transform=plt.gca().transAxes,
+    #      bbox = dict(facecolor = 'red', alpha = 0.5))
+    # plt.legend()
+    # plt.grid()
+   
+    # plt.show()
+    return NEES_st_err
+
+def plot_MSE(num_coords, ENU_pos_err, AC_dt, bias_sec_arr):
+    '''
+    This function plots the Mean Square Error (MSE) ENU position for the system.  This plot is used to see
+    overall how well the system is performing per timestep. The Root Mean Square Error (RMSE) is also provided
+    to show how the system did for the entirety of the data.
+
+    Args: 
+    num_coords: The number of timesteps in the flight data
+    ENU_pos_err: A (# of timesteps, 3) array of the difference between the truth and predicted ENU position state for each timestep
+    AC_dt: A (# of timesteps,) array of the difference in time between each data point timestamp. (Used to create a timestep for plots) 
+    bias_sec_arr: an array showing where timestep wise the bias starts
+
+    Returns:
+    Nothing
+    '''
+    # Make timestep for plot
+    timestep = np.zeros(num_coords)
+    t = 0
+    for i in range(len(timestep)):
+        t += AC_dt[i]
+        timestep[i] = t 
+
+    # Mean Square Error (MSE)
+    mse = np.zeros(num_coords)
+    for cnt, err in enumerate(ENU_pos_err):
+        mse[cnt] = (err[0]**2 + err[1]**2 + err[2]**2)/len(err)
+
+    # Root Mean Square Error (RSME)
+    se = np.zeros(num_coords)
+    for cnt, err in enumerate(ENU_pos_err):
+        se[cnt] = (err[0]**2 + err[1]**2 + err[2]**2)
+    rmse = round(np.sqrt(sum(se)/len(se)), 3)
+
+    # Plotting MSE
     plt.figure()
-    plt.title('NEES of Filter')
-    plt.plot(timestep, NEES_mat, label = "NEES")
-    plt.plot(timestep, stab_line, label = "Stability")
+    plt.title('MSE of RBRAIM')
+    plt.xlim(0,num_coords)
+    plt.ylim(0,40)
+    plt.plot(timestep, mse, label = "MSE")
     plt.xlabel('Time (secs)')
-    plt.ylabel('NEES')
+    plt.ylabel('MSE')
+    # Show where bias starts
+    plt.vlines(x=bias_sec_arr, ymin=0, ymax=40, colors='r', ls='--', label=f'Bias Starts')
+    # Adding RMSE inside a rectangular box
+    plt.text(0.15, 0.8, f"RMSE = {rmse}", fontsize = 12, ha = 'center', transform=plt.gca().transAxes,
+         bbox = dict(facecolor = 'red', alpha = 0.5))
     plt.legend()
+    plt.grid()
    
     plt.show()
-    return          
+
+    return            
 
 def plot_res(SV_res_mat, thres_mat, AC_dt):
     '''
@@ -681,23 +762,25 @@ Cdt_dot = 0.0
 Pr_std = 0.0
 
 # Real AC data
-GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot)
+# GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = gen_flight_data(ENU_cfp, ENU_cfp_ECEF, Cdt, Cdt_dot)
 
 # Scenario 1 (Validation Test)
-# GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = scenario_1(num_coords = 1000, Cdt = -0.000410830353*C, Cdt_dot = 0.0)
-# GPS_PR = scenario_1_bias(GPS_PR)
-# GPS_PR = GPS_PR.reshape(len(GPS_PR)*8,1)
+GPS_PR, GPS_PR_0, GPS_pos_0, GPS_pos_matrix, AC_dt, AC_x0, truth_table = scenario_1(Cdt = -0.000410830353*C, Cdt_dot = 0.0)
+GPS_PR, bias_sec_arr = scenario_1_bias(GPS_PR)
 
 # Scenario 2 (Jamming Test 1) using flight data
-# GPS_PR = scenario_2(GPS_PR)
-# GPS_PR = GPS_PR.reshape(len(GPS_PR)*8,1)
+# GPS_PR, jam_sec_arr = scenario_2(GPS_PR)
 
 # Scenario 3 (Jamming Test 2) using flight data
-# GPS_PR = scenario_3(GPS_PR)
-# GPS_PR = GPS_PR.reshape(len(GPS_PR)*8,1)
+# GPS_PR, jam_sec_arr = scenario_3(GPS_PR)
 
 # Scenario 4 (Bias Test 1) using flight data
-GPS_PR = scenario_4(GPS_PR)
+# GPS_PR, bias_sec_arr = scenario_4(GPS_PR)
+
+# Scenario 5 (Bias Test 2) using flight data
+# GPS_PR, bias_sec_arr = scenario_5(GPS_PR)
+
+# Reshape PR to work with code (Not needed if just using real AC data and none of the scenarios)
 GPS_PR = GPS_PR.reshape(len(GPS_PR)*8,1)
 
 # Add in accceleration for initial state
@@ -865,9 +948,13 @@ for i in range(num_coords):
         for cnt in range(len(nan_arr)):
             res = np.insert(res, nan_arr[cnt], 0)
         
+        # Array used for plotting residuals
         SV_res_mat[i] = res
+        # Reset array
         st_res_err_idx_plt = []
+        st_res_max_idx_plt = []
 
+        # Save array of variables for plotting
         sens_meas_mat.append(sens_meas)
         pred_meas_mat.append(pred_meas)
         est_state_mat[i] = curr_x
@@ -966,11 +1053,14 @@ for i in range(num_coords):
                 srt_curr_idx = srt_st_res_max_idx_plt[z]
                 res = np.insert(res, srt_curr_idx, 0)
         
-        print('done')
+        # Save array for plotting residuals
         SV_res_mat[i] = res
+
+        # Reset array 
         st_res_err_idx_plt = []
         st_res_max_idx_plt = []
 
+        # Save array of variables for plotting
         sens_meas_mat.append(sens_meas)
         pred_meas_mat.append(pred_meas)
         est_state_mat[i] = curr_x
@@ -988,11 +1078,13 @@ for i in range(num_coords):
 
 
 # Plot Error with covariance bound
-state_error = plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt)
+state_error = plot_error(num_coords, truth_table, est_state_mat, cov_bounds, AC_dt, bias_sec_arr)
 # Plot Normalized Estimation Error Squared (NEES)
-plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
+ENU_pos_err = plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
+# Plot Mean Square Error (MSE)
+plot_MSE(num_coords, ENU_pos_err, AC_dt, bias_sec_arr)
 # Plot Cumulative Residual over time
-plot_res(SV_res_mat, thres_mat, AC_dt)
+# plot_res(SV_res_mat, thres_mat, AC_dt)
 print('done')
 # Convert Residual data to CSV for Excel Table
 # np.savetxt("residuals.csv", res_mat, delimiter=",")
