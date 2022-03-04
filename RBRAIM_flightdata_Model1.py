@@ -479,6 +479,7 @@ def plot_error(truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User Coords x-axis
     plt.figure()
     plt.title('User coordinates error for x-axis (ENU)')
+    plt.ylim(-6.5,5)
     plt.plot(timestep, state_error[:,0], label = "Error")
     plt.plot(timestep, up_bound[:,0], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,0], color = 'black', label = "Lower Bound")
@@ -489,6 +490,7 @@ def plot_error(truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User Coords y-axis
     plt.figure()
     plt.title('User coordinates error for y-axis (ENU)')
+    plt.ylim(-7,8)
     plt.plot(timestep, state_error[:,2], label = "Error")
     plt.plot(timestep, up_bound[:,2], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,2], color = 'black', label = "Lower Bound")
@@ -499,6 +501,7 @@ def plot_error(truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User Coords z-axis
     plt.figure()
     plt.title('User coordinates error for z-axis (ENU)')
+    plt.ylim(-7,10)
     plt.plot(timestep, state_error[:,4], label = "Error")
     plt.plot(timestep, up_bound[:,4], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,4], color = 'black', label = "Lower Bound")
@@ -509,6 +512,7 @@ def plot_error(truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User velocity x-axis
     plt.figure()
     plt.title('User Velocity error for x-axis (ENU)')
+    plt.ylim(-16,17)
     plt.plot(timestep, state_error[:,1], label = "Error")
     plt.plot(timestep, up_bound[:,1], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,1], color = 'black', label = "Lower Bound")
@@ -519,6 +523,7 @@ def plot_error(truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User velocity y-axis
     plt.figure()
     plt.title('User Velocity error for y-axis (ENU)')
+    plt.ylim(-15,15)
     plt.plot(timestep, state_error[:,3], label = "Error")
     plt.plot(timestep, up_bound[:,3], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,3], color = 'black', label = "Lower Bound")
@@ -529,6 +534,7 @@ def plot_error(truth_table, est_state_mat, cov_bounds, AC_dt):
     # Plotting Truth vs Predicted User velocity z-axis
     plt.figure()
     plt.title('User Velocity error for z-axis (ENU)')
+    plt.ylim(-16,18)
     plt.plot(timestep, state_error[:,5], label = "Error")
     plt.plot(timestep, up_bound[:,5], color = 'black', label = "Upper Bound")
     plt.plot(timestep, lw_bound[:,5], color = 'black', label = "Lower Bound")
@@ -592,6 +598,7 @@ def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     #Plotting SV0 (PRN 3) residual and threshold each timestep
     plt.figure()
     plt.title('SV0 residual vs Time')
+    plt.ylim(-23,25)
     plt.plot(timestep, SV_res_mat[:, 0], label = "SV0 Residual")
     plt.plot(timestep, thres_mat[:], label = "Threshold")
     plt.xlabel('Time (secs)')
@@ -601,6 +608,7 @@ def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     #Plotting SV1 (PRN 4) residual and threshold each timestep
     plt.figure()
     plt.title('SV1 residual vs Time')
+    plt.ylim(-17,17)
     plt.plot(timestep, SV_res_mat[:, 1], label = "SV1 Residual")
     plt.plot(timestep, thres_mat[:], label = "Threshold")
     plt.xlabel('Time (secs)')
@@ -610,6 +618,7 @@ def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     #Plotting SV2 (PRN 9) residual and threshold each timestep
     plt.figure()
     plt.title('SV2 residual vs Time')
+    plt.ylim(-28,22)
     plt.plot(timestep, SV_res_mat[:, 2], label = "SV2 Residual")
     plt.plot(timestep, thres_mat[:], label = "Threshold")
     plt.xlabel('Time (secs)')
@@ -619,6 +628,7 @@ def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     #Plotting SV3 (PRN 16) residual and threshold each timestep
     plt.figure()
     plt.title('SV3 residual vs Time')
+    plt.ylim(-19,14)
     plt.plot(timestep, SV_res_mat[:, 3], label = "SV3 Residual")
     plt.plot(timestep, thres_mat[:], label = "Threshold")
     plt.xlabel('Time (secs)')
@@ -637,6 +647,7 @@ def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     #Plotting SV5 (PRN 26) residual and threshold each timestep
     plt.figure()
     plt.title('SV5 residual vs Time')
+    plt.ylim(-21,24)
     plt.plot(timestep, SV_res_mat[:, 5], label = "SV5 Residual")
     plt.plot(timestep, thres_mat[:], label = "Threshold")
     plt.xlabel('Time (secs)')
@@ -646,6 +657,7 @@ def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     #Plotting SV6 (PRN 27) residual and threshold each timestep
     plt.figure()
     plt.title('SV6 residual vs Time')
+    plt.ylim(-22,25)
     plt.plot(timestep, SV_res_mat[:, 6], label = "SV6 Residual")
     plt.plot(timestep, thres_mat[:], label = "Threshold")
     plt.xlabel('Time (secs)')
@@ -655,6 +667,7 @@ def plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt):
     #Plotting SV7 (PRN 31) residual and threshold each timestep
     plt.figure()
     plt.title('SV7 residual vs Time')
+    plt.ylim(-24,30)
     plt.plot(timestep, SV_res_mat[:, 7], label = "SV7 Residual")
     plt.plot(timestep, thres_mat[:], label = "Threshold")
     plt.xlabel('Time (secs)')
@@ -978,9 +991,9 @@ for i in range(num_coords):
 # Plot Truth coordinates to Predicted Coordinates
 # plot_coords(truth_table, est_state_mat, AC_dt)
 # Plot Error with covariance bound
-state_error = plot_error(truth_table, est_state_mat, cov_bounds, AC_dt)
+# state_error = plot_error(truth_table, est_state_mat, cov_bounds, AC_dt)
 # Plot Normalized Estimation Error Squared (NEES)
-plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
+# plot_NEES(num_coords, state_error, NEES_cov_mat, AC_dt)
 # Plot Cumulative Residual over time
 plot_res(SV_res_mat, thres_mat, cum_res_mat, AC_dt)
 print('done')
